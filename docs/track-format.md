@@ -51,5 +51,7 @@ systems). At startup the game loads every file ending in `.ohtrack`, in name ord
 files of at most 1 MiB each. A file is skipped, with the reason printed to standard error, if it
 does not parse, fails validation, or reuses an `id` or `name` already used by a built-in or
 earlier custom track. Custom tracks appear after the built-in ones in the local race track
-list. They are not available in championships. They can be raced online when the server has the
-identical file; see [multiplayer](multiplayer.md#custom-tracks-online).
+list. They are not available in championships. To race one online, host a room with it: the
+room carries the track and other players download it automatically; see
+[multiplayer](multiplayer.md#custom-tracks-online). Tracks downloaded that way are saved in
+`tracks/downloaded` and appear in your own track list.

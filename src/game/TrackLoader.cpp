@@ -2,14 +2,18 @@
 #include "TrackLoader.h"
 
 #include "TrackFile.h"
+#include "TrackHash.h"
 
 #include <algorithm>
 #include <cstdio>
 
 #ifdef _WIN32
+#include <direct.h>
 #include <windows.h>
 #else
 #include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 namespace
@@ -88,7 +92,8 @@ bool Taken(const std::vector<TrackDefinition>& pTracks, const TrackDefinition& p
 
 std::vector<TrackDefinition> LoadCustomTracks(const std::string& pDirectory,
                                               const std::vector<TrackDefinition>& pExisting,
-                                              std::vector<std::string>& pMessages)
+                                              std::vector<std::string>& pMessages,
+                                              bool pAllowSharedNames)
 {
     std::vector<TrackDefinition> loaded;
     std::vector<TrackDefinition> known = pExisting;
@@ -109,7 +114,16 @@ std::vector<TrackDefinition> LoadCustomTracks(const std::string& pDirectory,
         std::string problem = ParseTrack(text, track);
         if (problem.empty())
             problem = track.Validate();
-        if (problem.empty() && Taken(known, track))
+        if (problem.empty() && pAllowSharedNames)
+        {
+            const std::string hash = TrackHash(track);
+            for (const TrackDefinition& other : known)
+            {
+                if (TrackHash(other) == hash)
+                    problem = "same track is already loaded";
+            }
+        }
+        else if (problem.empty() && Taken(known, track))
             problem = "id or name is already used by another track";
         if (!problem.empty())
         {
@@ -120,4 +134,63 @@ std::vector<TrackDefinition> LoadCustomTracks(const std::string& pDirectory,
         loaded.push_back(track);
     }
     return loaded;
+}
+
+bool EnsureDirectory(const std::string& pDirectory)
+{
+    if (pDirectory.empty())
+        return false;
+    // Create each missing component in turn.
+    for (std::size_t index = 1; index <= pDirectory.size(); ++index)
+    {
+        if (index != pDirectory.size() && pDirectory[index] != '/' && pDirectory[index] != '\\')
+            continue;
+        const std::string part = pDirectory.substr(0, index);
+#ifdef _WIN32
+        _mkdir(part.c_str());
+#else
+        mkdir(part.c_str(), 0755);
+#endif
+    }
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesA(pDirectory.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat info;
+    return stat(pDirectory.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+#endif
+}
+
+int CountTrackFiles(const std::string& pDirectory)
+{
+    return static_cast<int>(ListTrackFiles(pDirectory).size());
+}
+
+bool SaveDownloadedTrack(const std::string& pDirectory, const std::string& pHash,
+                         const std::string& pText)
+{
+    if (pHash.size() != 64 || pText.empty() || static_cast<long>(pText.size()) > kMaximumTrackFileBytes
+        || !EnsureDirectory(pDirectory))
+        return false;
+    for (char c : pHash)
+    {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return false;
+    }
+    const std::string path = pDirectory + "/" + pHash + kExtension;
+    if (FILE* existing = std::fopen(path.c_str(), "rb"))
+    {
+        std::fclose(existing);
+        return true;
+    }
+    if (CountTrackFiles(pDirectory) >= kMaximumDownloadedTracks)
+        return false;
+    FILE* file = std::fopen(path.c_str(), "wb");
+    if (file == nullptr)
+        return false;
+    const bool written = std::fwrite(pText.data(), 1, pText.size(), file) == pText.size();
+    std::fclose(file);
+    if (!written)
+        std::remove(path.c_str());
+    return written;
 }

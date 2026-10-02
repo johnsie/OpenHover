@@ -110,7 +110,7 @@ visible beside connection status so players and support staff can identify the e
 
 ## Compatibility Policy
 
-The current compatibility tuple is protocol `6`, built-in content `2`. A client may enter the
+The current compatibility tuple is protocol `7`, built-in content `2`. A client may enter the
 lobby only when both values exactly match the server; this release does not attempt mixed-version
 simulation or silently downgrade features.
 
@@ -190,23 +190,45 @@ installing it as `openhover-raceserver.service`. The service listens on TCP port
 
 ## Custom Tracks Online
 
-A server operator installs custom tracks by starting `OpenHoverServer --tracks <folder>`. The
-server loads every valid `.ohtrack` file in that folder (see [track format](track-format.md)),
-skips any whose `id` or `name` is not plain text of up to 24 letters, digits, spaces, `.`, `_` or
-`-`, and logs each hosted track's id and hash at startup.
+Custom tracks are carried by the room, not installed on the server. A host's game uploads the
+track when it creates a room; the server checks it, keeps it in memory for the life of the room,
+and hands it to anyone who joins. Nothing is stored on the server and operators do nothing.
 
-Identity is a SHA-256 hash of the track's canonical text form, so comments and spacing in a file
-do not matter but any change to geometry, items, colours, or the `id` does. Rooms refer to a track
-by its index in the server's list: the built-in tracks first, then the custom tracks in name order.
+A track's identity is the SHA-256 hash of its canonical text form (see
+[track format](track-format.md)): comments and spacing in a file do not matter, but any change to
+geometry, items, colours, or the `id` does. Every player in a custom-track room ends up with a
+track whose hash matches the room's.
 
-After `WELCOME` the server sends `TRACKS <count>` and one `TRACK <index>|<id>|<name>|<hash>` line
-per track. The client replies with one `OWN <hash>` line for each custom track it has (at most 64;
-built-in tracks are implied by the content version). The server then enforces ownership:
-`CREATE`, `JOIN`, `JOINCODE`, and `SET` are refused with `ERROR MISSING TRACK <name>` unless the
-player has a track with the matching hash, and `SET` also requires that every player already in
-the room has it. Championship rooms are limited to the built-in tracks. The client shows a room's
-track from its own copy, and shows "YOU NEED THIS TRACK FILE" when it does not have one.
+**Hosting.** The client sends `TRACKUP <bytes>|<sha256>` and the server answers `TRACKUP READY`.
+The client then sends the canonical text as hexadecimal `TRACKDATA <hex>` lines (1500 hex
+characters each) and the server answers `TRACKUP OK <sha256>` or `ERROR TRACK REJECTED <reason>`.
+Finally the client sends `CREATE name|mode|1000|laps|capacity|rivals|weapons|private`, where track
+index 1000 means "the track I just uploaded". The server refuses an upload that is over 32 KiB,
+not in canonical form, not valid, not matching its declared hash, named like a built-in track, or
+outside the limits below, and refuses `CREATE` without an accepted upload. Track ids and names must
+be plain text (letters, digits, space, `.`, `_`, `-`, 1 to 24 characters) because they appear in
+protocol fields. Championships use the built-in tracks only.
 
-The hash is an agreement check, not anti-cheat: a client declares what it has and the server
-simulates the race, so a mismatch can only cause a client to draw a different course than the one
-being raced, which the check prevents for honest clients.
+Limits on an uploaded track: at most 256 waypoints, 128 boost pads, and 64 each of hazard zones,
+mines, and raised sections; road half-width 2 to 30; coordinates within 5000 units; item radii up
+to 200; route length up to 20 km. Each player may upload 8 times a minute, and at most 16 rooms
+may carry a custom track at once.
+
+**Joining.** A room's entry in the lobby snapshot ends with the track hash (`-` for built-in
+tracks). When a player joins a custom-track room their game uses a track it already has with that
+hash, or sends `TRACKGET <roomId>` and receives `TRACKDL <room>|<bytes>|<hash>`,
+`TRACKCHUNK <room>|<hex>` lines, and `TRACKEND <room>`. The game checks the file's validity and
+that its hash equals the room's before using it, then tells the server `HAVE <hash>`. The server
+refuses `READY` until the player's `HAVE` matches the room's hash and refuses `START` unless every
+player's does, so everyone races on the identical file. Downloads are limited to 8 a minute per
+player, and a private room's track is only sent to its members.
+
+**Downloaded tracks are kept.** The game saves each downloaded track in its `tracks/downloaded`
+folder as `<hash>.ohtrack` (at most 64 files; when the folder is full a track is still usable for
+that session but not saved) and loads that folder at startup, so the same track is never fetched
+twice and can be used in local races.
+
+Changing a custom room's track back to a built-in one is allowed; a built-in room can never gain a
+custom track, so create a new room instead. The hash is an agreement check, not anti-cheat: the
+server simulates the race, so a mismatch could only make a client draw a different course than
+the one being raced, which the check prevents for honest clients.

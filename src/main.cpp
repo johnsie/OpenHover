@@ -32,6 +32,7 @@
 #include "RouteGuidance.h"
 #include "SteeringAssist.h"
 #include "TrackDefinition.h"
+#include "TrackFile.h"
 #include "TrackHash.h"
 #include "TrackLoader.h"
 #include "TcpLobbyClient.h"
@@ -76,6 +77,7 @@ struct LobbyRoomView
     bool mRaceRunning = false;
     int mRaceMode = 0;
     int mTrackIndex = 0;
+    std::string mCustomHash = "-";
     int mLapCount = 0;
     int mRivalCount = 0;
     bool mWeaponsAllowed = false;
@@ -140,6 +142,63 @@ bool gHostPrivateRoom = false;
 std::string gHostedRoomCode;
 bool gLobbyReady = false;
 bool gHostCreatePending = false;
+// Hosting a custom track: the track is uploaded first (stage 1: header sent, 2: data sent), then
+// the room is created.
+int gHostUploadStage = 0;
+std::string gHostUploadHex;
+std::string gHostPendingCreate;
+// A track being downloaded for the room this player joined.
+struct TrackDownload
+{
+    bool mActive = false;
+    int mRoomId = 0;
+    std::size_t mBytes = 0;
+    std::string mHash;
+    std::string mHex;
+};
+TrackDownload gTrackDownload;
+// The custom-track hash this player last told the server they have verified, and the hash whose
+// download is in flight (to avoid asking twice).
+std::string gHaveTrackHashSent;
+std::string gTrackRequestedHash;
+
+std::string EncodeHex(const std::string& pBytes)
+{
+    static const char* const digits = "0123456789abcdef";
+    std::string out;
+    out.reserve(pBytes.size() * 2);
+    for (unsigned char c : pBytes)
+    {
+        out += digits[c >> 4];
+        out += digits[c & 15];
+    }
+    return out;
+}
+
+bool DecodeHex(const std::string& pHex, std::string& pOut)
+{
+    if (pHex.size() % 2 != 0)
+        return false;
+    pOut.clear();
+    for (std::size_t index = 0; index < pHex.size(); index += 2)
+    {
+        int value = 0;
+        for (int nibble = 0; nibble < 2; ++nibble)
+        {
+            const char c = pHex[index + nibble];
+            int digit = 0;
+            if (c >= '0' && c <= '9')
+                digit = c - '0';
+            else if (c >= 'a' && c <= 'f')
+                digit = c - 'a' + 10;
+            else
+                return false;
+            value = value * 16 + digit;
+        }
+        pOut += static_cast<char>(value);
+    }
+    return true;
+}
 bool gDisplayNameSetupConnectsToLobby = false;
 int gOnlineRaceRoomId = 0;
 unsigned int gOnlineRaceTick = 0;
@@ -198,7 +257,7 @@ void ParseLobbySnapshot(const std::string& pMessage)
                                      std::atoi(fields[3].c_str()),
                                      std::atoi(fields[4].c_str()) != 0,
                                      std::atoi(fields[5].c_str()) != 0});
-        else if (fields.size() == 14 && fields[0] == "R")
+        else if (fields.size() == 15 && fields[0] == "R")
         {
             LobbyRoomView room;
             room.mId = std::atoi(fields[1].c_str());
@@ -214,6 +273,7 @@ void ParseLobbySnapshot(const std::string& pMessage)
             room.mWeaponsAllowed = std::atoi(fields[11].c_str()) != 0;
             room.mPrivate = std::atoi(fields[12].c_str()) != 0;
             room.mReadyPlayerCount = std::atoi(fields[13].c_str());
+            room.mCustomHash = fields[14];
             gLobbyRooms.push_back(room);
         }
     }
@@ -2175,62 +2235,53 @@ std::string LocalTrackName(int pIndex)
 
 // Hash of each entry in gLocalTracks, in the same order.
 std::vector<std::string> gLocalTrackHashes;
+// Where tracks downloaded from race rooms are kept on this computer.
+std::string gDownloadedTracksDirectory;
 
-// The tracks the connected server offers, with the hash of each. Rooms refer to a track by its
-// index in this list.
-struct ServerTrackView
+// Index into gLocalTracks of the track a room is running, or -1 when this player does not have
+// it yet. Built-in rooms carry an index; custom rooms carry the SHA-256 hash of the track, and the
+// player's copy must match that hash exactly.
+int LocalIndexForRoomTrack(int pTrackIndex, const std::string& pCustomHash)
 {
-    std::string mId;
-    std::string mName;
-    std::string mHash;
-};
-std::vector<ServerTrackView> gServerTracks;
-
-// Index into gLocalTracks of the file that is byte-for-byte the server's track (same id and
-// same hash), or -1 when this player does not have it.
-int LocalIndexForServerTrack(int pServerIndex)
-{
-    if (pServerIndex < 0 || pServerIndex >= static_cast<int>(gServerTracks.size()))
-        return -1;
-    const ServerTrackView& wanted = gServerTracks[pServerIndex];
-    for (int index = 0; index < static_cast<int>(gLocalTracks.size())
-         && index < static_cast<int>(gLocalTrackHashes.size()); ++index)
+    if (pCustomHash.empty() || pCustomHash == "-")
+        return pTrackIndex >= 0 && pTrackIndex < 3 ? pTrackIndex : -1;
+    for (int index = 0; index < static_cast<int>(gLocalTrackHashes.size()); ++index)
     {
-        if (gLocalTracks[index].mId == wanted.mId && gLocalTrackHashes[index] == wanted.mHash)
+        if (gLocalTrackHashes[index] == pCustomHash)
             return index;
     }
     return -1;
 }
 
-// Number of tracks a host can pick from: the server's list once received, else the built-ins.
-int HostableTrackCount()
+// Whether a local track can be hosted online: built-in, or plain-text names within the server's
+// size and range limits.
+bool TrackEligibleForOnline(int pIndex)
 {
-    return gServerTracks.empty() ? 3 : static_cast<int>(gServerTracks.size());
+    if (pIndex < 0 || pIndex >= static_cast<int>(gLocalTracks.size()))
+        return false;
+    if (pIndex < 3)
+        return true;
+    const TrackDefinition& track = gLocalTracks[pIndex];
+    return IsOnlineSafeTrack(track) && CheckOnlineTrackLimits(track).empty()
+        && static_cast<int>(SerializeTrack(track).size()) <= kMaximumTrackUploadBytes;
 }
 
-// Next host track in a direction, skipping tracks this player does not have.
+// Next track a host can pick in a direction, skipping tracks that cannot be hosted online.
 int NextHostTrack(int pCurrent, int pDirection)
 {
-    const int count = HostableTrackCount();
+    const int count = static_cast<int>(gLocalTracks.size());
     for (int step = 1; step <= count; ++step)
     {
         const int candidate = ((pCurrent + pDirection * step) % count + count) % count;
-        if (gServerTracks.empty() || LocalIndexForServerTrack(candidate) >= 0)
+        if (TrackEligibleForOnline(candidate))
             return candidate;
     }
     return pCurrent;
 }
 
-std::string HostTrackName(int pServerIndex)
+std::string HostTrackName(int pIndex)
 {
-    if (pServerIndex >= 0 && pServerIndex < static_cast<int>(gServerTracks.size()))
-    {
-        std::string name = gServerTracks[pServerIndex].mName;
-        for (char& c : name)
-            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return name;
-    }
-    return LocalTrackName(pServerIndex);
+    return LocalTrackName(pIndex);
 }
 bool gNewGhostBest = false;
 bool gGhostVisible = true;
@@ -2963,14 +3014,10 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         if (gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
         {
             const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
-            // Preview the room's track from this player's own copy; if they lack the identical
-            // file there is no preview, and joining is refused by the server.
-            const int previewTrack = LocalIndexForServerTrack(room.mTrackIndex) >= 0
-                ? LocalIndexForServerTrack(room.mTrackIndex)
-                : (gServerTracks.empty() && room.mTrackIndex >= 0 && room.mTrackIndex < 3
-                       ? room.mTrackIndex : -1);
-            const std::string previewTrackName = previewTrack >= 0 || !gServerTracks.empty()
-                ? HostTrackName(room.mTrackIndex) : std::string("TRACK");
+            // Preview the room's track from this player's own copy. A custom track this player
+            // does not have yet downloads automatically when they join the room.
+            const int previewTrack = LocalIndexForRoomTrack(room.mTrackIndex, room.mCustomHash);
+            const std::string previewTrackName = room.mName;
             if (previewTrack >= 0)
                 DrawTrackMinimap(previewTrack, previewLeft, previewTop, previewSize);
             const std::string players = std::to_string(room.mPlayerCount) + " OF "
@@ -2981,7 +3028,7 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             if (previewTrack < 0)
             {
                 glColor3f(1.0f, 0.3f, 0.2f);
-                DrawPixelText("YOU NEED THIS TRACK FILE", previewLeft, previewTop + previewSize + 8, 2);
+                DrawPixelText("CUSTOM TRACK - DOWNLOADS WHEN YOU JOIN", previewLeft, previewTop + previewSize + 8, 2);
                 glColor3f(0.66f, 0.66f, 0.73f);
             }
             const std::string settings = std::to_string(room.mLapCount) + " LAPS  "
@@ -4157,6 +4204,12 @@ int main(int pArgumentCount, char* pArguments[])
         const std::vector<TrackDefinition> customTracks = LoadCustomTracks(
             std::string(trackPrefix) + "tracks", gLocalTracks, trackMessages);
         gLocalTracks.insert(gLocalTracks.end(), customTracks.begin(), customTracks.end());
+        // Tracks downloaded from race rooms in earlier sessions. Two people may publish tracks
+        // with the same name, so only exact duplicates are dropped here.
+        gDownloadedTracksDirectory = std::string(trackPrefix) + "tracks/downloaded";
+        const std::vector<TrackDefinition> downloadedTracks = LoadCustomTracks(
+            gDownloadedTracksDirectory, gLocalTracks, trackMessages, true);
+        gLocalTracks.insert(gLocalTracks.end(), downloadedTracks.begin(), downloadedTracks.end());
         for (const std::string& message : trackMessages)
             std::fprintf(stderr, "OpenHover custom track %s\n", message.c_str());
         SDL_free(trackPrefix);
@@ -4606,7 +4659,10 @@ int main(int pArgumentCount, char* pArguments[])
         gLobbyJoinedRoomId = 0;
         gLobbyJoinPendingRoomId = 0;
         gLobbyStatus = "DISCONNECTED";
-        gServerTracks.clear();
+        gHaveTrackHashSent.clear();
+        gTrackRequestedHash.clear();
+        gHostUploadStage = 0;
+        gTrackDownload = TrackDownload();
         gLobbyServerVersion.clear();
         gLobbyServerProtocol = 0;
         gLobbyServerContent = 0;
@@ -4767,6 +4823,11 @@ int main(int pArgumentCount, char* pArguments[])
         else if (room.mId == gLobbyJoinedRoomId)
         {
             const bool nextReady = !gLobbyReady;
+            if (nextReady && room.mCustomHash != "-" && gHaveTrackHashSent != room.mCustomHash)
+            {
+                gLobbyStatus = "TRACK STILL DOWNLOADING";
+                return;
+            }
             if (lobbyClient.SendCommand(std::string("READY ") + (nextReady ? "1" : "0")))
             {
                 gLobbyReady = nextReady;
@@ -4804,6 +4865,69 @@ int main(int pArgumentCount, char* pArguments[])
             frontScreen = FrontScreen::HostRaceSetup;
         }
     };
+    // Starts hosting a room. A built-in track is just named in the request; a custom track is
+    // uploaded first and the room is created once the server has accepted it.
+    const auto requestCreateRoom = [&](const std::string& pRoomName)
+    {
+        const bool customTrack = gHostTrackIndex >= 3;
+        const std::string command = "CREATE " + (customTrack ? std::string("CUSTOM") : pRoomName) + "|"
+            + std::to_string(gHostRaceMode) + "|"
+            + std::to_string(customTrack ? kCustomTrackIndex : gHostTrackIndex) + "|"
+            + std::to_string(gHostLapCount) + "|" + std::to_string(gHostPlayerCapacity) + "|"
+            + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0") + "|"
+            + (gHostPrivateRoom ? "1" : "0");
+        if (!customTrack)
+        {
+            gHostCreatePending = lobbyClient.SendCommand(command);
+            gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
+            return;
+        }
+        if (!TrackEligibleForOnline(gHostTrackIndex))
+        {
+            gLobbyStatus = "THIS TRACK CANNOT BE HOSTED ONLINE";
+            return;
+        }
+        const std::string text = SerializeTrack(gLocalTracks[gHostTrackIndex]);
+        gHostUploadHex = EncodeHex(text);
+        gHostPendingCreate = command;
+        if (lobbyClient.SendCommand("TRACKUP " + std::to_string(text.size()) + "|"
+                                    + gLocalTrackHashes[gHostTrackIndex]))
+        {
+            gHostUploadStage = 1;
+            gLobbyStatus = "UPLOADING TRACK";
+        }
+        else
+            gLobbyStatus = "SERVER UNAVAILABLE";
+    };
+    // Makes sure this player has, and has told the server they have, the custom track of the
+    // room they joined: use a matching copy they already own, or download it from the room.
+    const auto syncRoomTrack = [&]()
+    {
+        if (gLobbyJoinedRoomId == 0)
+        {
+            gTrackRequestedHash.clear();
+            return;
+        }
+        for (const LobbyRoomView& room : gLobbyRooms)
+        {
+            if (room.mId != gLobbyJoinedRoomId || room.mCustomHash == "-" || room.mCustomHash.empty())
+                continue;
+            if (gHaveTrackHashSent == room.mCustomHash)
+                return;
+            if (LocalIndexForRoomTrack(kCustomTrackIndex, room.mCustomHash) >= 0)
+            {
+                if (lobbyClient.SendCommand("HAVE " + room.mCustomHash))
+                    gHaveTrackHashSent = room.mCustomHash;
+            }
+            else if (gTrackRequestedHash != room.mCustomHash && !gTrackDownload.mActive
+                     && lobbyClient.SendCommand("TRACKGET " + std::to_string(room.mId)))
+            {
+                gTrackRequestedHash = room.mCustomHash;
+                gLobbyStatus = "DOWNLOADING TRACK";
+            }
+            return;
+        }
+    };
     const auto updateLobby = [&]()
     {
         if (frontScreen != FrontScreen::Multiplayer && frontScreen != FrontScreen::HostRaceSetup
@@ -4820,6 +4944,7 @@ int main(int pArgumentCount, char* pArguments[])
                 + std::to_string(ReconnectPolicy::kMaxAttempts) + ")";
         }
         lobbyClient.Tick();
+        syncRoomTrack();
         if (lobbyClient.State() == TcpLobbyClientState::Connecting)
             gLobbyStatus = "CONNECTING";
         else if (lobbyClient.State() == TcpLobbyClientState::Failed)
@@ -4833,7 +4958,10 @@ int main(int pArgumentCount, char* pArguments[])
             gLobbyPlayerId = 0;
             gLobbyJoinedRoomId = 0;
             gLobbyJoinPendingRoomId = 0;
-            gServerTracks.clear();
+            gHaveTrackHashSent.clear();
+            gTrackRequestedHash.clear();
+            gHostUploadStage = 0;
+            gTrackDownload = TrackDownload();
             gLobbyServerVersion.clear();
             gLobbyServerProtocol = 0;
             gLobbyServerContent = 0;
@@ -4890,28 +5018,78 @@ int main(int pArgumentCount, char* pArguments[])
             else if (message.compare(0, 8, "WELCOME ") == 0)
             {
                 gLobbyPlayerId = std::atoi(message.substr(8).c_str());
-                // Tell the server which custom tracks this player has, by hash, so rooms on them
-                // are only open to players with identical files.
-                int declared = 0;
-                for (std::size_t index = BuiltInTracks().size();
-                     index < gLocalTracks.size() && index < gLocalTrackHashes.size() && declared < 64;
-                     ++index)
+            }
+            else if (message.compare(0, 11, "TRACKUP OK ") == 0 && gHostUploadStage == 2)
+            {
+                // The server accepted the track: now create the room that carries it.
+                gHostUploadStage = 0;
+                gHostCreatePending = lobbyClient.SendCommand(gHostPendingCreate);
+                gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
+            }
+            else if (message == "TRACKUP READY" && gHostUploadStage == 1)
+            {
+                for (std::size_t offset = 0; offset < gHostUploadHex.size(); offset += kTrackChunkHexCharacters)
+                    lobbyClient.SendCommand("TRACKDATA " + gHostUploadHex.substr(offset, kTrackChunkHexCharacters));
+                gHostUploadStage = 2;
+            }
+            else if (message.compare(0, 8, "TRACKDL ") == 0)
+            {
+                const std::vector<std::string> fields = SplitLobbyField(message.substr(8), '|');
+                gTrackDownload = TrackDownload();
+                if (fields.size() == 3 && std::atoi(fields[1].c_str()) > 0
+                    && std::atoi(fields[1].c_str()) <= kMaximumTrackUploadBytes && fields[2].size() == 64)
                 {
-                    if (IsOnlineSafeTrack(gLocalTracks[index]))
-                    {
-                        lobbyClient.SendCommand("OWN " + gLocalTrackHashes[index]);
-                        ++declared;
-                    }
+                    gTrackDownload.mActive = true;
+                    gTrackDownload.mRoomId = std::atoi(fields[0].c_str());
+                    gTrackDownload.mBytes = static_cast<std::size_t>(std::atoi(fields[1].c_str()));
+                    gTrackDownload.mHash = fields[2];
                 }
             }
-            else if (message.compare(0, 7, "TRACKS ") == 0)
-                gServerTracks.clear();
-            else if (message.compare(0, 6, "TRACK ") == 0)
+            else if (message.compare(0, 11, "TRACKCHUNK ") == 0 && gTrackDownload.mActive)
             {
-                const std::vector<std::string> fields = SplitLobbyField(message.substr(6), '|');
-                if (fields.size() == 4 && std::atoi(fields[0].c_str()) == static_cast<int>(gServerTracks.size())
-                    && gServerTracks.size() < 256)
-                    gServerTracks.push_back({fields[1], fields[2], fields[3]});
+                const std::size_t bar = message.find('|', 11);
+                const std::string hex = bar == std::string::npos ? std::string() : message.substr(bar + 1);
+                if (gTrackDownload.mHex.size() + hex.size() <= gTrackDownload.mBytes * 2)
+                    gTrackDownload.mHex += hex;
+                else
+                    gTrackDownload = TrackDownload();
+            }
+            else if (message.compare(0, 9, "TRACKEND ") == 0 && gTrackDownload.mActive)
+            {
+                const TrackDownload download = gTrackDownload;
+                gTrackDownload = TrackDownload();
+                std::string text;
+                std::string problem;
+                if (download.mHex.size() != download.mBytes * 2 || !DecodeHex(download.mHex, text))
+                    problem = "incomplete download";
+                TrackDefinition track;
+                if (problem.empty())
+                    problem = ParseTrack(text, track);
+                if (problem.empty())
+                    problem = track.Validate();
+                if (problem.empty())
+                    problem = CheckOnlineTrackLimits(track);
+                if (problem.empty() && (SerializeTrack(track) != text || TrackHash(track) != download.mHash))
+                    problem = "the file does not match the room's hash";
+                bool wantedByRoom = false;
+                for (const LobbyRoomView& room : gLobbyRooms)
+                    wantedByRoom = wantedByRoom || (room.mId == download.mRoomId && room.mCustomHash == download.mHash);
+                if (problem.empty() && !wantedByRoom)
+                    problem = "the room no longer uses this track";
+                if (!problem.empty())
+                    gLobbyStatus = "TRACK DOWNLOAD FAILED: " + problem;
+                else
+                {
+                    if (LocalIndexForRoomTrack(kCustomTrackIndex, download.mHash) < 0)
+                    {
+                        gLocalTracks.push_back(track);
+                        gLocalTrackHashes.push_back(download.mHash);
+                    }
+                    const bool saved = SaveDownloadedTrack(gDownloadedTracksDirectory, download.mHash, text);
+                    gHaveTrackHashSent = download.mHash;
+                    lobbyClient.SendCommand("HAVE " + download.mHash);
+                    gLobbyStatus = saved ? "TRACK DOWNLOADED" : "TRACK READY - NOT SAVED";
+                }
             }
             else if (message.compare(0, 10, "REPORTACK ") == 0)
                 gLobbyStatus = "REPORT RECEIVED - THANK YOU";
@@ -4983,7 +5161,7 @@ int main(int pArgumentCount, char* pArguments[])
                     gOnlineRaceFinished = false;
                     for (const LobbyRoomView& room : gLobbyRooms)
                     {
-                        const int localTrack = LocalIndexForServerTrack(room.mTrackIndex);
+                        const int localTrack = LocalIndexForRoomTrack(room.mTrackIndex, room.mCustomHash);
                         if (room.mId == gOnlineRaceRoomId && localTrack >= 0)
                         {
                             trackIndex = localTrack;
@@ -5030,9 +5208,9 @@ int main(int pArgumentCount, char* pArguments[])
                             break;
                         }
                     }
-                    if (LocalIndexForServerTrack(eventTrack) >= 0)
+                    if (eventTrack >= 0 && eventTrack < 3)
                     {
-                        trackIndex = LocalIndexForServerTrack(eventTrack);
+                        trackIndex = eventTrack;
                         loadTrack(false);
                         gOnlineRacers.clear();
                         gOnlineMissiles.clear();
@@ -5082,6 +5260,7 @@ int main(int pArgumentCount, char* pArguments[])
             else if (message.compare(0, 6, "ERROR ") == 0)
             {
                 gHostCreatePending = false;
+                gHostUploadStage = 0;
                 if (gLobbyJoinPendingRoomId != 0)
                 {
                     gLobbyJoinedRoomId = 0;
@@ -5114,6 +5293,21 @@ int main(int pArgumentCount, char* pArguments[])
                     gLobbyStatus = "SERVER FULL - TRY LATER";
                 else if (error == "players not ready")
                     gLobbyStatus = "WAITING FOR ALL PLAYERS TO READY";
+                else if (error.compare(0, 15, "TRACK REJECTED ") == 0)
+                {
+                    std::string reason = error.substr(15);
+                    for (char& c : reason)
+                        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    gLobbyStatus = "TRACK REJECTED: " + reason;
+                }
+                else if (error == "TRACK NOT VERIFIED YET")
+                    gLobbyStatus = "TRACK STILL DOWNLOADING";
+                else if (error == "players still need the track")
+                    gLobbyStatus = "WAITING FOR PLAYERS TO GET THE TRACK";
+                else if (error == "CHAMPIONSHIP NEEDS BUILT-IN TRACKS")
+                    gLobbyStatus = "CHAMPIONSHIP NEEDS A BUILT-IN TRACK";
+                else if (error.find("track downloads") != std::string::npos)
+                    gLobbyStatus = "TOO MANY TRACK DOWNLOADS - WAIT A MINUTE";
                 else
                     gLobbyStatus = "SERVER ERROR";
             }
@@ -5245,14 +5439,7 @@ int main(int pArgumentCount, char* pArguments[])
                             gHostPrivateRoom = !gHostPrivateRoom;
                         else if (option == 7)
                         {
-                            const std::string command = "CREATE " + HostTrackName(gHostTrackIndex) + "|"
-                                + std::to_string(gHostRaceMode)
-                                + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
-                                + "|" + std::to_string(gHostPlayerCapacity) + "|"
-                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0")
-                                + "|" + (gHostPrivateRoom ? "1" : "0");
-                            gHostCreatePending = lobbyClient.SendCommand(command);
-                            gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
+                            requestCreateRoom(HostTrackName(gHostTrackIndex));
                         }
                         else if (option == 8)
                             frontScreen = FrontScreen::Multiplayer;
@@ -5608,13 +5795,7 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         if (gHostSetupSelection == 7)
                         {
-                            const std::string command = "CREATE OPEN RACE|" + std::to_string(gHostRaceMode)
-                                + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
-                                + "|" + std::to_string(gHostPlayerCapacity) + "|"
-                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0")
-                                + "|" + (gHostPrivateRoom ? "1" : "0");
-                            gHostCreatePending = lobbyClient.SendCommand(command);
-                            gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
+                            requestCreateRoom("OPEN RACE");
                         }
                         else if (gHostSetupSelection == 8)
                             frontScreen = FrontScreen::Multiplayer;

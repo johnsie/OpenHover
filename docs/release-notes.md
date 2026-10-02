@@ -3,6 +3,20 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.16
+
+- Online custom tracks now travel with the room. A host picks any of their tracks when creating a
+  room; the game uploads it, the server checks it and holds it only while the room exists, and
+  players who join download it automatically. Everyone races on a track whose SHA-256 hash matches
+  the room's: the server will not ready a player, or start the race, until each player has
+  verified the identical file. Downloaded tracks are saved in `tracks/downloaded` on your computer
+  (up to 64) and appear in your track list. Server operators install nothing. Uploaded tracks must
+  use plain-text names and stay within size and range limits (see
+  [multiplayer](multiplayer.md#custom-tracks-online)). Championships still use the built-in
+  tracks. The protocol is now version 7, so update the client and server together. This replaces
+  the `--tracks` server folder from 0.1.15. `OpenHoverTrackCheck` is now included in the desktop
+  and race-server packages.
+
 ## 0.1.15
 
 - Tracks can now be written as text files and checked with the new `OpenHoverTrackCheck` tool;

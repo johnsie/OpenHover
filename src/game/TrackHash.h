@@ -15,4 +15,9 @@ std::string TrackHash(const TrackDefinition& pTrack);
 bool IsOnlineSafeTrackText(const std::string& pText);
 bool IsOnlineSafeTrack(const TrackDefinition& pTrack);
 
+// Bounds that keep a track someone else uploaded from stalling or confusing a race server: item
+// counts and coordinate and size ranges. Returns an empty string if the track is within them,
+// otherwise a short reason. Run it in addition to TrackDefinition::Validate().
+std::string CheckOnlineTrackLimits(const TrackDefinition& pTrack);
+
 #endif

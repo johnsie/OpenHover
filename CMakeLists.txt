@@ -85,10 +85,10 @@ if(UNIX)
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
     set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages")
     if(OPENHOVER_DESKTOP_PACKAGE)
-        install(TARGETS OpenHover RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(TARGETS OpenHover OpenHoverTrackCheck RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
         set(CPACK_PACKAGE_NAME openhover)
     else()
-        install(TARGETS OpenHoverServer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(TARGETS OpenHoverServer OpenHoverTrackCheck RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
         install(FILES packaging/systemd/openhover-raceserver.service
                 DESTINATION lib/systemd/system)
         set(CPACK_PACKAGE_NAME openhover-raceserver)
@@ -271,7 +271,7 @@ if(BUILD_TESTING AND NOT WIN32)
 
         add_test(NAME ServerVersionSmoke COMMAND OpenHoverServer --version)
         set_tests_properties(ServerVersionSmoke PROPERTIES
-            PASS_REGULAR_EXPRESSION "protocol=6 content=2")
+            PASS_REGULAR_EXPRESSION "protocol=7 content=2")
     endif()
 
     add_executable(TrackLapTimeSmoke tests/TrackLapTimeSmoke.cpp)
