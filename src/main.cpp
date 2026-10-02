@@ -3353,10 +3353,10 @@ int main(int pArgumentCount, char* pArguments[])
                         break;
                     }
                 }
-                SDL_StopTextInput();
                 gOnlineChatMessages.clear();
                 gOnlineChatInput.clear();
-                gOnlineChatInputFocused = false;
+                gOnlineChatInputFocused = true;
+                SDL_StartTextInput();
                 frontScreen = FrontScreen::OnlineRace;
                 gLobbyStatus = "RACING";
             }
@@ -3658,11 +3658,6 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    if (frontScreen == FrontScreen::OnlineRace && gOnlineChatInputFocused)
-                    {
-                        gOnlineChatInputFocused = false;
-                        continue;
-                    }
                     if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::OnlineRace || frontScreen == FrontScreen::DisplayNameSetup || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
                         || frontScreen == FrontScreen::LocalSetup)
                     {
@@ -3718,14 +3713,6 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         if (!gOnlineChatInput.empty() && lobbyClient.SendCommand("CHAT " + gOnlineChatInput))
                             gOnlineChatInput.clear();
-                        gOnlineChatInputFocused = false;
-                    }
-                    else if (!gOnlineChatInputFocused
-                             && (event.key.keysym.sym == SDLK_t || event.key.keysym.sym == SDLK_RETURN
-                                 || event.key.keysym.sym == SDLK_KP_ENTER))
-                    {
-                        gOnlineChatInputFocused = true;
-                        SDL_StartTextInput();
                     }
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::DisplayNameSetup)
@@ -3942,13 +3929,14 @@ int main(int pArgumentCount, char* pArguments[])
         const double frameSeconds = (currentTick - previousTick) / tickFrequency;
         previousTick = currentTick;
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
+        const bool onlineRace = frontScreen == FrontScreen::OnlineRace;
         const bool shiftPressed = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
         const bool downPressed = keys[SDL_SCANCODE_DOWN];
         HovercraftInput input;
-        input.mThrottle = (shiftPressed || keys[SDL_SCANCODE_W] ? 1.0 : 0.0)
-            - (keys[SDL_SCANCODE_S] || downPressed ? 1.0 : 0.0);
-        input.mSteering = (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0)
-            - (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
+        input.mThrottle = (shiftPressed || (!onlineRace && keys[SDL_SCANCODE_W]) ? 1.0 : 0.0)
+            - ((!onlineRace && keys[SDL_SCANCODE_S]) || downPressed ? 1.0 : 0.0);
+        input.mSteering = ((!onlineRace && keys[SDL_SCANCODE_D]) || keys[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0)
+            - ((!onlineRace && keys[SDL_SCANCODE_A]) || keys[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
         input.mJump = keys[SDL_SCANCODE_UP];
         input.mFire = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
         input.mReverseFacing = shiftPressed && downPressed;
