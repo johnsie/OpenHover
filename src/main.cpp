@@ -3342,23 +3342,26 @@ int main(int pArgumentCount, char* pArguments[])
             }
             else if (message.compare(0, 5, "RACE ") == 0 && ParseRaceSnapshot(message))
             {
-                for (const LobbyRoomView& room : gLobbyRooms)
+                if (frontScreen != FrontScreen::OnlineRace)
                 {
-                    if (room.mId == gOnlineRaceRoomId
-                        && room.mTrackIndex >= 0
-                        && room.mTrackIndex < static_cast<int>(builtInTracks.size()))
+                    for (const LobbyRoomView& room : gLobbyRooms)
                     {
-                        trackIndex = room.mTrackIndex;
-                        loadTrack(false);
-                        break;
+                        if (room.mId == gOnlineRaceRoomId
+                            && room.mTrackIndex >= 0
+                            && room.mTrackIndex < static_cast<int>(builtInTracks.size()))
+                        {
+                            trackIndex = room.mTrackIndex;
+                            loadTrack(false);
+                            break;
+                        }
                     }
+                    gOnlineChatMessages.clear();
+                    gOnlineChatInput.clear();
+                    gOnlineChatInputFocused = true;
+                    SDL_StartTextInput();
+                    frontScreen = FrontScreen::OnlineRace;
+                    gLobbyStatus = "RACING";
                 }
-                gOnlineChatMessages.clear();
-                gOnlineChatInput.clear();
-                gOnlineChatInputFocused = true;
-                SDL_StartTextInput();
-                frontScreen = FrontScreen::OnlineRace;
-                gLobbyStatus = "RACING";
             }
             else if (message.compare(0, 8, "RACEHUD ") == 0)
                 ParseRaceHudSnapshot(message);
