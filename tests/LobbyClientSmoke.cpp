@@ -130,8 +130,8 @@ int main(int pArgumentCount, char* pArguments[])
     const bool hostConnected = ConnectAndHello(host, port, "Host", 1);
     const bool guestConnected = hostConnected && ConnectAndHello(guest, port, "Guest", 2);
     const bool guestAnnounced = guestConnected && TickUntil(host, "CHAT 0 Guest JOINED LOBBY");
-    const bool namedChatDelivered = guestAnnounced && host.SendCommand("CHAT Welcome")
-        && TickUntil(host, "CHAT 1 Welcome") && TickUntil(guest, "CHAT 1 Welcome");
+    const bool namedChatDelivered = guestAnnounced && host.SendCommand("CHAT Welcome?")
+        && TickUntil(host, "CHAT 1 Welcome?") && TickUntil(guest, "CHAT 1 Welcome?");
     const bool spectatorConnected = namedChatDelivered && ConnectAndHello(spectator, port, "Spectator", 3);
     const bool roomCreated = namedChatDelivered && spectatorConnected
         && host.SendCommand("CREATE Smoke race|0|0|3|2|0|1")
