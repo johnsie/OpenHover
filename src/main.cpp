@@ -1955,58 +1955,74 @@ void DrawMissile(const Missile& pMissile)
     glTranslated(state.mX, state.mHeight, state.mY);
     glRotated(-state.mTravelHeading * 180.0 / kPi, 0.0, 1.0, 0.0);
 
-    glColor3f(0.16f, 0.68f, 0.58f);
+    glColor3f(0.06f, 0.22f, 0.94f);
     glBegin(GL_QUAD_STRIP);
-    for (int degree = 0; degree <= 360; degree += 45)
+    for (int degree = 0; degree <= 360; degree += 60)
     {
         const double angle = degree * kPi / 180.0;
-        const double vertical = std::sin(angle) * 0.13;
-        const double sideways = std::cos(angle) * 0.13;
-        glVertex3d(-0.4, vertical, sideways);
+        const double vertical = std::sin(angle) * 0.17;
+        const double sideways = std::cos(angle) * 0.17;
+        glVertex3d(-0.46, vertical, sideways);
         glVertex3d(0.3, vertical, sideways);
     }
     glEnd();
 
-    glColor3f(0.7f, 0.88f, 0.78f);
+    glColor3f(0.08f, 0.9f, 1.0f);
     glBegin(GL_TRIANGLE_FAN);
-    glVertex3d(0.62, 0.0, 0.0);
-    for (int degree = 0; degree <= 360; degree += 45)
+    glVertex3d(0.78, 0.0, 0.0);
+    for (int degree = 0; degree <= 360; degree += 60)
     {
         const double angle = degree * kPi / 180.0;
-        glVertex3d(0.3, std::sin(angle) * 0.13, std::cos(angle) * 0.13);
+        glVertex3d(0.3, std::sin(angle) * 0.17, std::cos(angle) * 0.17);
     }
     glEnd();
 
-    glColor3f(0.09f, 0.13f, 0.14f);
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex3d(-0.43, 0.0, 0.0);
-    for (int degree = 0; degree <= 360; degree += 45)
+    glColor3f(1.0f, 0.84f, 0.05f);
+    glBegin(GL_QUAD_STRIP);
+    for (int degree = 0; degree <= 360; degree += 60)
     {
         const double angle = degree * kPi / 180.0;
-        glVertex3d(-0.4, std::sin(angle) * 0.09, std::cos(angle) * 0.09);
+        const double vertical = std::sin(angle) * 0.18;
+        const double sideways = std::cos(angle) * 0.18;
+        glVertex3d(-0.18, vertical, sideways);
+        glVertex3d(-0.02, vertical, sideways);
     }
     glEnd();
 
-    glColor3f(0.92f, 0.3f, 0.16f);
+    glColor3f(1.0f, 0.04f, 0.48f);
     for (int fin = 0; fin < 4; ++fin)
     {
         const double angle = fin * kPi * 0.5;
         const double vertical = std::sin(angle);
         const double sideways = std::cos(angle);
         glBegin(GL_TRIANGLES);
-        glVertex3d(-0.28, vertical * 0.11, sideways * 0.11);
-        glVertex3d(-0.52, vertical * 0.34, sideways * 0.34);
-        glVertex3d(0.08, vertical * 0.12, sideways * 0.12);
+        glVertex3d(-0.18, vertical * 0.14, sideways * 0.14);
+        glVertex3d(-0.56, vertical * 0.42, sideways * 0.42);
+        glVertex3d(0.14, vertical * 0.15, sideways * 0.15);
         glEnd();
     }
 
-    const double exhaustLength = 0.22 + std::fmod(state.mSpeed * 0.013, 0.16);
+    glColor3f(0.98f, 0.98f, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex3d(0.02, 0.175, -0.11);
+    glVertex3d(0.27, 0.175, -0.09);
+    glVertex3d(0.34, 0.175, 0.09);
+    glVertex3d(0.02, 0.175, 0.11);
+    glEnd();
+
+    const double exhaustLength = 0.28 + std::fmod(state.mSpeed * 0.018, 0.22);
     glDisable(GL_LIGHTING);
-    glColor3f(1.0f, 0.7f, 0.12f);
+    glColor3f(1.0f, 0.16f, 0.02f);
     glBegin(GL_TRIANGLES);
-    glVertex3d(-0.4, -0.08, 0.0);
-    glVertex3d(-0.4, 0.08, 0.0);
-    glVertex3d(-0.4 - exhaustLength, 0.0, 0.0);
+    glVertex3d(-0.46, -0.14, 0.0);
+    glVertex3d(-0.46, 0.14, 0.0);
+    glVertex3d(-0.46 - exhaustLength, 0.0, 0.0);
+    glEnd();
+    glColor3f(1.0f, 0.92f, 0.1f);
+    glBegin(GL_TRIANGLES);
+    glVertex3d(-0.47, -0.07, 0.0);
+    glVertex3d(-0.47, 0.07, 0.0);
+    glVertex3d(-0.47 - exhaustLength * 0.72, 0.0, 0.0);
     glEnd();
     glEnable(GL_LIGHTING);
     glPopMatrix();
