@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+#include "AuthoritativeRace.h"
 #include "Lobby.h"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -41,6 +43,13 @@ bool ParseInteger(const std::string& pText, int& pValue)
         return false;
     pValue = static_cast<int>(value);
     return true;
+}
+
+bool ParseDouble(const std::string& pText, double& pValue)
+{
+    char* end = nullptr;
+    pValue = std::strtod(pText.c_str(), &end);
+    return end != pText.c_str() && *end == '\0';
 }
 
 bool ParseRoomFields(const std::string& pText, std::string& pRoomName, LobbyRaceSettings& pSettings)
@@ -91,6 +100,22 @@ void BroadcastLobbySnapshot(const Lobby& pLobby, const std::vector<ClientConnect
         SendLine(client, snapshot.str());
 }
 
+void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
+                           const std::vector<ClientConnection>& pClients)
+{
+    const RaceSnapshot snapshot = pRace.Snapshot();
+    std::ostringstream message;
+    message << "RACE " << pRoomId << '|' << snapshot.mTick;
+    for (const RaceRacerSnapshot& racer : snapshot.mRacers)
+    {
+        message << '|' << racer.mPlayerId << ',' << racer.mState.mX << ',' << racer.mState.mY
+                << ',' << racer.mState.mHeading << ',' << racer.mState.mSpeed << ','
+                << racer.mState.mHeight;
+    }
+    for (const ClientConnection& client : pClients)
+        SendLine(client, message.str());
+}
+
 void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, Lobby& pLobby)
 {
     if (pClients[pIndex].mPlayerId != 0)
@@ -100,6 +125,7 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
 }
 
 void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& pLobby,
+                   std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
                    const std::vector<ClientConnection>& pClients)
 {
     const std::size_t separator = pLine.find(' ');
@@ -142,18 +168,59 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             return;
         }
     }
-    else if (command == "JOIN" || command == "START" || command == "LEAVE")
+    else if (command == "JOIN" || command == "LEAVE")
     {
         int roomId = 0;
         const bool success = command == "LEAVE" ? argument.empty() && pLobby.LeaveRoom(pClient.mPlayerId)
             : ParseInteger(argument, roomId) && (command == "JOIN"
-                ? pLobby.JoinRoom(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId))
-                : pLobby.StartRace(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId)));
+                ? pLobby.JoinRoom(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId)) : false);
         if (success)
         {
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
         }
+    }
+    else if (command == "START")
+    {
+        int roomId = 0;
+        if (ParseInteger(argument, roomId) && pLobby.StartRace(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId)))
+        {
+            for (const LobbyRoom& room : pLobby.Rooms())
+            {
+                if (room.mId == static_cast<LobbyRoomId>(roomId))
+                {
+                    AuthoritativeRace race;
+                    if (race.Start(room.mPlayerIds, room.mSettings.mTrackIndex))
+                        pRaces[room.mId] = race;
+                    else
+                        SendLine(pClient, "ERROR could not start race");
+                    break;
+                }
+            }
+            BroadcastLobbySnapshot(pLobby, pClients);
+            return;
+        }
+    }
+    else if (command == "INPUT")
+    {
+        std::vector<std::string> fields;
+        std::stringstream stream(argument);
+        std::string field;
+        while (std::getline(stream, field, '|'))
+            fields.push_back(field);
+        double throttle = 0.0;
+        double steering = 0.0;
+        int jump = 0;
+        int reverseFacing = 0;
+        const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
+        std::map<LobbyRoomId, AuthoritativeRace>::iterator race = pRaces.find(roomId);
+        if (fields.size() == 4 && race != pRaces.end()
+            && ParseDouble(fields[0], throttle) && ParseDouble(fields[1], steering)
+            && ParseInteger(fields[2], jump) && ParseInteger(fields[3], reverseFacing)
+            && (jump == 0 || jump == 1) && (reverseFacing == 0 || reverseFacing == 1)
+            && race->second.SubmitInput({pClient.mPlayerId, throttle, steering,
+                                         jump != 0, reverseFacing != 0}))
+            return;
     }
     else if (command == "SET")
     {
@@ -211,6 +278,7 @@ int main(int pArgumentCount, char* pArguments[])
 
     std::cout << "OpenHoverServer listening on TCP port " << port << '\n';
     Lobby lobby;
+    std::map<LobbyRoomId, AuthoritativeRace> races;
     std::vector<ClientConnection> clients;
     while (true)
     {
@@ -223,7 +291,8 @@ int main(int pArgumentCount, char* pArguments[])
             FD_SET(client.mSocket, &readable);
             maximumSocket = std::max(maximumSocket, client.mSocket);
         }
-        if (select(maximumSocket + 1, &readable, nullptr, nullptr, nullptr) < 0)
+        timeval timeout = {0, 8333};
+        if (select(maximumSocket + 1, &readable, nullptr, nullptr, &timeout) < 0)
         {
             if (errno == EINTR)
                 continue;
@@ -268,9 +337,15 @@ int main(int pArgumentCount, char* pArguments[])
                 client.mReceiveBuffer.erase(0, lineEnd + 1);
                 if (!line.empty() && line.back() == '\r')
                     line.pop_back();
-                HandleCommand(client, line, lobby, clients);
+                HandleCommand(client, line, lobby, races, clients);
             }
             ++index;
+        }
+        for (std::map<LobbyRoomId, AuthoritativeRace>::iterator race = races.begin(); race != races.end(); ++race)
+        {
+            race->second.Step();
+            if (race->second.Snapshot().mTick % 4 == 0)
+                BroadcastRaceSnapshot(race->first, race->second, clients);
         }
     }
     for (const ClientConnection& client : clients)

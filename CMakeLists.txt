@@ -23,7 +23,7 @@ target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
 
-add_library(openhover_lobby STATIC src/net/Lobby.cpp src/net/TcpLobbyClient.cpp)
+add_library(openhover_lobby STATIC src/net/AuthoritativeRace.cpp src/net/Lobby.cpp src/net/TcpLobbyClient.cpp)
 target_include_directories(openhover_lobby PUBLIC src/net)
 target_link_libraries(openhover_lobby PUBLIC openhover_game)
 
@@ -167,4 +167,8 @@ if(BUILD_TESTING AND NOT WIN32)
         target_link_libraries(LobbyClientSmoke PRIVATE openhover_lobby)
         add_test(NAME LobbyClientSmoke COMMAND LobbyClientSmoke $<TARGET_FILE:OpenHoverServer>)
     endif()
+
+    add_executable(AuthoritativeRaceSmoke tests/AuthoritativeRaceSmoke.cpp)
+    target_link_libraries(AuthoritativeRaceSmoke PRIVATE openhover_lobby)
+    add_test(NAME AuthoritativeRaceSmoke COMMAND AuthoritativeRaceSmoke)
 endif()
