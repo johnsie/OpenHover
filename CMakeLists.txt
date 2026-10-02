@@ -38,7 +38,7 @@ add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
 target_link_libraries(OpenHover PRIVATE openhover_game openhover_lobby SDL2::SDL2 OpenGL::GL)
 
 if(WIN32)
-    target_link_libraries(OpenHover PRIVATE SDL2::SDL2main)
+    target_link_libraries(OpenHover PRIVATE SDL2::SDL2main ws2_32)
     install(TARGETS OpenHover RUNTIME DESTINATION .)
 
     set(CPACK_GENERATOR NSIS)

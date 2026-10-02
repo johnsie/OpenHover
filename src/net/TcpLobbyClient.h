@@ -2,6 +2,7 @@
 #ifndef OPENHOVER_TCP_LOBBY_CLIENT_H
 #define OPENHOVER_TCP_LOBBY_CLIENT_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,7 @@ private:
     void FlushSendBuffer();
     void ReceiveMessages();
 
-    int mSocket = -1;
+    std::intptr_t mSocket = -1;
     TcpLobbyClientState mState = TcpLobbyClientState::Disconnected;
     std::string mSendBuffer;
     std::string mReceiveBuffer;
