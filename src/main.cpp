@@ -82,6 +82,8 @@ std::string gPlayerDisplayName;
 std::string gLobbyStatus = "CONNECTING TO SERVER";
 int gLobbySelectedRoom = -1;
 int gLobbyPlayerId = 0;
+int gLobbyJoinedRoomId = 0;
+int gLobbyJoinPendingRoomId = 0;
 int gHostSetupSelection = 0;
 int gHostRaceMode = 0;
 int gHostTrackIndex = 0;
@@ -141,6 +143,11 @@ void ParseLobbySnapshot(const std::string& pMessage)
         gLobbySelectedRoom = -1;
     else if (gLobbySelectedRoom < 0 || gLobbySelectedRoom >= static_cast<int>(gLobbyRooms.size()))
         gLobbySelectedRoom = 0;
+    bool joinedRoomExists = false;
+    for (const LobbyRoomView& room : gLobbyRooms)
+        joinedRoomExists = joinedRoomExists || room.mId == gLobbyJoinedRoomId;
+    if (!joinedRoomExists)
+        gLobbyJoinedRoomId = 0;
 }
 
 bool ParseRaceSnapshot(const std::string& pMessage)
@@ -2123,7 +2130,10 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         const bool selectedRoomIsHosted = gLobbySelectedRoom >= 0
             && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
             && gLobbyRooms[gLobbySelectedRoom].mHostId == gLobbyPlayerId;
-        DrawLobbyButton(selectedRoomIsHosted ? "START RACE" : "JOIN GAME",
+        const bool selectedRoomIsJoined = gLobbySelectedRoom >= 0
+            && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
+            && gLobbyRooms[gLobbySelectedRoom].mId == gLobbyJoinedRoomId;
+        DrawLobbyButton(selectedRoomIsHosted ? "START RACE" : selectedRoomIsJoined ? "LEAVE ROOM" : "JOIN GAME",
                         actionLeft + 16, top + 16, actionWidth - 32, true);
         DrawLobbyButton("HOST RACE", actionLeft + 16, top + 72, actionWidth - 32, false);
         glColor3f(0.22f, 0.22f, 0.27f);
@@ -3002,6 +3012,8 @@ int main()
         gLobbyChatInput.clear();
         gLobbySelectedRoom = -1;
         gLobbyPlayerId = 0;
+        gLobbyJoinedRoomId = 0;
+        gLobbyJoinPendingRoomId = 0;
         gLobbyStatus = "DISCONNECTED";
         gOnlineRaceRoomId = 0;
         gOnlineRaceTick = 0;
@@ -3069,6 +3081,7 @@ int main()
             else if (message.compare(0, 5, "ROOM ") == 0 && gHostCreatePending)
             {
                 gHostCreatePending = false;
+                gLobbyJoinedRoomId = std::atoi(message.substr(5).c_str());
                 gLobbyStatus = "ROOM CREATED";
                 frontScreen = FrontScreen::Multiplayer;
             }
@@ -3092,7 +3105,22 @@ int main()
             else if (message.compare(0, 6, "ERROR ") == 0)
             {
                 gHostCreatePending = false;
-                gLobbyStatus = "SERVER ERROR";
+                if (gLobbyJoinPendingRoomId != 0)
+                {
+                    gLobbyJoinedRoomId = 0;
+                    gLobbyJoinPendingRoomId = 0;
+                }
+                const std::string error = message.substr(6);
+                if (error == "room full")
+                    gLobbyStatus = "ROOM FULL";
+                else if (error == "race running")
+                    gLobbyStatus = "RACE STARTED";
+                else if (error == "already in room")
+                    gLobbyStatus = "ALREADY JOINED";
+                else if (error == "room unavailable")
+                    gLobbyStatus = "ROOM UNAVAILABLE";
+                else
+                    gLobbyStatus = "SERVER ERROR";
             }
         }
     };
@@ -3161,8 +3189,23 @@ int main()
                         && gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
                     {
                         const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
-                        lobbyClient.SendCommand(std::string(room.mHostId == gLobbyPlayerId ? "START " : "JOIN ")
-                            + std::to_string(room.mId));
+                        if (room.mHostId == gLobbyPlayerId)
+                            lobbyClient.SendCommand("START " + std::to_string(room.mId));
+                        else if (room.mId == gLobbyJoinedRoomId)
+                        {
+                            if (lobbyClient.SendCommand("LEAVE"))
+                            {
+                                gLobbyJoinedRoomId = 0;
+                                gLobbyJoinPendingRoomId = 0;
+                                gLobbyStatus = "LEFT ROOM";
+                            }
+                        }
+                        else if (lobbyClient.SendCommand("JOIN " + std::to_string(room.mId)))
+                        {
+                            gLobbyJoinedRoomId = room.mId;
+                            gLobbyJoinPendingRoomId = room.mId;
+                            gLobbyStatus = "JOINING RACE";
+                        }
                     }
                     else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42))
                     {

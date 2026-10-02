@@ -188,9 +188,27 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
     else if (command == "JOIN")
     {
         int roomId = 0;
-        const bool success = ParseInteger(argument, roomId)
-            && pLobby.JoinRoom(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId));
-        if (success)
+        const LobbyRoom* requestedRoom = nullptr;
+        if (ParseInteger(argument, roomId))
+        {
+            for (const LobbyRoom& room : pLobby.Rooms())
+            {
+                if (room.mId == static_cast<LobbyRoomId>(roomId))
+                {
+                    requestedRoom = &room;
+                    break;
+                }
+            }
+        }
+        if (!ParseInteger(argument, roomId) || requestedRoom == nullptr)
+            SendLine(pClient, "ERROR room unavailable");
+        else if (requestedRoom->mRaceRunning)
+            SendLine(pClient, "ERROR race running");
+        else if (pLobby.RoomForPlayer(pClient.mPlayerId) != 0)
+            SendLine(pClient, "ERROR already in room");
+        else if (static_cast<int>(requestedRoom->mPlayerIds.size()) >= requestedRoom->mSettings.mPlayerCapacity)
+            SendLine(pClient, "ERROR room full");
+        else if (pLobby.JoinRoom(pClient.mPlayerId, requestedRoom->mId))
         {
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
