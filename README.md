@@ -18,15 +18,27 @@ HoverRace project (kept separately as "HoverNet Classic").
 
 Small, independent building blocks that were first written in the licensed project but use
 none of its code: SHA-256, a gzip decoder, wire-format helpers, a track catalogue, and a
-verified downloader, each with tests. Build and test with:
+verified downloader, each with tests. The project also has an original 3D SDL2/OpenGL test
+arena with hovercraft controls, checkpoints, and lap timing. Build and test with:
 
 ```
 cmake -S . -B build && cmake --build build && ctest --test-dir build
 ```
 
+Run `./build/OpenHover` to drive the arena. Select **Play Local Game** from the main menu, choose
+the original track, lap count, and weapons setting, then select **Start Race**. A three-light
+countdown begins before the race. Use `W`/`S` or Shift/Down to accelerate and reverse, `A`/`D` or
+Left/Right to steer, Ctrl to boost, Up to jump, and Escape to quit. Boost energy recharges when
+not in use. A connected gamepad uses its left stick to steer, triggers to accelerate and brake,
+A to boost, and B to jump. Pass checkpoints in order, then cross the finish zone to complete a
+lap. Complete the selected number of laps to finish; press `R` to restart. The rivals follow the
+same course; the first craft to finish wins.
+
 ## Process
 
 - [Clean-room policy](docs/clean-room-policy.md): what may and may not go in.
+- [Roadmap](docs/roadmap.md): staged plan for the playable game and its original feature set.
+- [Track format](docs/track-format.md): v1 route and provenance requirements.
 - [Licensing](docs/licensing.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
 - [Provenance ledger](PROVENANCE.md): where every file came from. Run
   `scripts/check-provenance.py` before committing.
