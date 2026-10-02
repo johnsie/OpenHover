@@ -81,6 +81,7 @@ std::vector<std::string> gLobbyPlayers;
 std::vector<LobbyRoomView> gLobbyRooms;
 std::vector<std::string> gLobbyChatMessages;
 std::string gLobbyChatInput;
+bool gLobbyChatInputFocused = false;
 std::string gPlayerDisplayName;
 std::string gLobbyStatus = "CONNECTING TO SERVER";
 int gLobbySelectedRoom = -1;
@@ -1710,6 +1711,14 @@ void DrawPixelText(const char* pText, int pLeft, int pTop, int pScale)
     glEnd();
 }
 
+int PixelTextWidth(const std::string& pText, int pScale)
+{
+    int width = 0;
+    for (char character : pText)
+        width += PixelGlyphIndex(character) < 0 ? pScale * 4 : pScale * 6;
+    return width;
+}
+
 void DrawSetupOverlay(int pWidth, int pHeight)
 {
     glColor3f(0.2f, 0.9f, 1.0f);
@@ -2221,8 +2230,36 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         for (int messageIndex = firstMessage; messageIndex < static_cast<int>(gLobbyChatMessages.size()); ++messageIndex)
             DrawPixelText(gLobbyChatMessages[messageIndex].c_str(), chatLeft + 12,
                           chatTop + 12 + (messageIndex - firstMessage) * 22, 2);
-        glColor3f(0.62f, 0.62f, 0.68f);
-        DrawPixelText(gLobbyChatInput.c_str(), chatLeft + 12, inputTop + 9, 2);
+        const int inputTextLeft = chatLeft + 12;
+        const int inputTextWidth = chatWidth - 98;
+        const int maximumVisibleCharacters = std::max(1, inputTextWidth / 12);
+        const std::string visibleChatInput = gLobbyChatInput.size()
+            > static_cast<std::size_t>(maximumVisibleCharacters)
+            ? gLobbyChatInput.substr(gLobbyChatInput.size() - maximumVisibleCharacters) : gLobbyChatInput;
+        glColor3f(gLobbyChatInputFocused ? 0.82f : 0.62f,
+                  gLobbyChatInputFocused ? 0.9f : 0.62f,
+                  gLobbyChatInputFocused ? 0.92f : 0.68f);
+        DrawPixelText(visibleChatInput.c_str(), inputTextLeft, inputTop + 9, 2);
+        if (gLobbyChatInputFocused)
+        {
+            glColor3f(0.2f, 0.9f, 1.0f);
+            glBegin(GL_LINE_LOOP);
+            glVertex2i(chatLeft, inputTop);
+            glVertex2i(chatLeft + chatWidth - 86, inputTop);
+            glVertex2i(chatLeft + chatWidth - 86, inputTop + 32);
+            glVertex2i(chatLeft, inputTop + 32);
+            glEnd();
+            if ((SDL_GetTicks() / 500) % 2 == 0)
+            {
+                const int caretX = inputTextLeft + PixelTextWidth(visibleChatInput, 2);
+                glBegin(GL_QUADS);
+                glVertex2i(caretX, inputTop + 7);
+                glVertex2i(caretX + 2, inputTop + 7);
+                glVertex2i(caretX + 2, inputTop + 24);
+                glVertex2i(caretX, inputTop + 24);
+                glEnd();
+            }
+        }
         DrawLobbyButton("SEND", chatLeft + chatWidth - 76, inputTop - 5, 76, true);
     }
     else if (pScreen == FrontScreen::HostRaceSetup)
@@ -3142,6 +3179,7 @@ int main(int pArgumentCount, char* pArguments[])
         gLobbyRooms.clear();
         gLobbyChatMessages.clear();
         gLobbyChatInput.clear();
+        gLobbyChatInputFocused = false;
         gLobbySelectedRoom = -1;
         gLobbyPlayerId = 0;
         gLobbyJoinedRoomId = 0;
@@ -3162,6 +3200,7 @@ int main(int pArgumentCount, char* pArguments[])
             lobbyDisplayName.resize(24 - sessionSuffix.size());
         lobbyDisplayName += sessionSuffix;
         SDL_StartTextInput();
+        gLobbyChatInputFocused = true;
         gLobbyStatus = lobbyClient.Connect("outiva.com", 9700)
             ? "CONNECTING" : "SERVER UNAVAILABLE";
     };
@@ -3245,6 +3284,7 @@ int main(int pArgumentCount, char* pArguments[])
                 gOnlineTargetLaps = 0;
                 gOnlineRacers.clear();
                 SDL_StartTextInput();
+                gLobbyChatInputFocused = true;
                 frontScreen = FrontScreen::Multiplayer;
                 gLobbyStatus = "RACE COMPLETE";
             }
@@ -3334,6 +3374,7 @@ int main(int pArgumentCount, char* pArguments[])
                     if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 16, actionWidth - 32, 42)
                         && gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
                     {
+                        gLobbyChatInputFocused = false;
                         const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
                         if (room.mHostId == gLobbyPlayerId)
                             lobbyClient.SendCommand("START " + std::to_string(room.mId));
@@ -3355,6 +3396,7 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                     else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42))
                     {
+                        gLobbyChatInputFocused = false;
                         gHostSetupSelection = 0;
                         frontScreen = FrontScreen::HostRaceSetup;
                     }
@@ -3366,6 +3408,7 @@ int main(int pArgumentCount, char* pArguments[])
                     else if (IsPointInRect(mouseX, mouseY, margin + 16, top + 54, leftWidth - 32,
                                            topHeight - 70) && !gLobbyRooms.empty())
                     {
+                        gLobbyChatInputFocused = false;
                         gLobbySelectedRoom = std::min(static_cast<int>(gLobbyRooms.size()) - 1,
                             std::max(0, (mouseY - (top + 58)) / 38));
                     }
@@ -3374,9 +3417,13 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
                             gLobbyChatInput.clear();
+                        gLobbyChatInputFocused = true;
                     }
                     else if (IsPointInRect(mouseX, mouseY, chatLeft, inputTop, chatWidth, 32))
+                    {
                         SDL_StartTextInput();
+                        gLobbyChatInputFocused = true;
+                    }
                 }
                 else if (frontScreen == FrontScreen::HostRaceSetup)
                 {
@@ -3500,7 +3547,8 @@ int main(int pArgumentCount, char* pArguments[])
                 else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                     audioFeedback.PlayMenuConfirm();
             }
-            if (frontScreen == FrontScreen::Multiplayer && event.type == SDL_TEXTINPUT)
+            if (frontScreen == FrontScreen::Multiplayer && gLobbyChatInputFocused
+                && event.type == SDL_TEXTINPUT)
             {
                 if (gLobbyChatInput.size() + std::strlen(event.text.text) <= 120)
                     gLobbyChatInput += event.text.text;
@@ -3536,7 +3584,8 @@ int main(int pArgumentCount, char* pArguments[])
                     else
                         running = false;
                 }
-                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer)
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer
+                         && gLobbyChatInputFocused)
                 {
                     if (event.key.keysym.sym == SDLK_BACKSPACE && !gLobbyChatInput.empty())
                         gLobbyChatInput.erase(gLobbyChatInput.size() - 1);
@@ -3546,7 +3595,11 @@ int main(int pArgumentCount, char* pArguments[])
                         if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
                             gLobbyChatInput.clear();
                     }
-                    else if (event.key.keysym.sym == SDLK_UP && !gLobbyRooms.empty())
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer
+                         && !gLobbyChatInputFocused)
+                {
+                    if (event.key.keysym.sym == SDLK_UP && !gLobbyRooms.empty())
                         gLobbySelectedRoom = (gLobbySelectedRoom + static_cast<int>(gLobbyRooms.size()) - 1)
                             % static_cast<int>(gLobbyRooms.size());
                     else if (event.key.keysym.sym == SDLK_DOWN && !gLobbyRooms.empty())
