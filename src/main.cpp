@@ -1288,7 +1288,8 @@ void DrawCraftRaceNumber(int pNumber)
 }
 
 void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = false,
-                    CraftClass pCraftClass = CraftClass::Balanced, int pRaceNumber = 1)
+                    CraftClass pCraftClass = CraftClass::Balanced, int pRaceNumber = 1,
+                    int pOnlineColorIndex = -1)
 {
     glShadeModel(GL_SMOOTH);
     const double hoverOffset = std::fmax(0.0, pState.mHeight - 1.2);
@@ -1325,9 +1326,19 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
         ? std::fmin(13.0, pState.mVerticalSpeed * 1.7)
         : std::fmax(-22.0, pState.mVerticalSpeed * 3.0);
     glRotated(verticalPitch, 0.0, 0.0, 1.0);
-    const float accentRed = pGhost ? 0.12f : (pRival ? 0.16f : 0.9f);
-    const float accentGreen = pGhost ? 0.92f : (pRival ? 0.66f : 0.08f);
-    const float accentBlue = pGhost ? 0.82f : (pRival ? 0.82f : 0.12f);
+    static const float kOnlineAccentColors[][3] = {
+        {0.9f, 0.08f, 0.12f}, {0.08f, 0.76f, 0.96f}, {0.98f, 0.72f, 0.1f},
+        {0.84f, 0.2f, 0.9f}, {0.12f, 0.82f, 0.42f}, {1.0f, 0.4f, 0.08f},
+        {0.28f, 0.44f, 1.0f}, {0.94f, 0.28f, 0.54f}
+    };
+    const int onlineColorCount = static_cast<int>(sizeof(kOnlineAccentColors) / sizeof(kOnlineAccentColors[0]));
+    const int onlineColorIndex = pOnlineColorIndex < 0 ? 0 : pOnlineColorIndex % onlineColorCount;
+    const float accentRed = pOnlineColorIndex >= 0 ? kOnlineAccentColors[onlineColorIndex][0]
+        : (pGhost ? 0.12f : (pRival ? 0.16f : 0.9f));
+    const float accentGreen = pOnlineColorIndex >= 0 ? kOnlineAccentColors[onlineColorIndex][1]
+        : (pGhost ? 0.92f : (pRival ? 0.66f : 0.08f));
+    const float accentBlue = pOnlineColorIndex >= 0 ? kOnlineAccentColors[onlineColorIndex][2]
+        : (pGhost ? 0.82f : (pRival ? 0.82f : 0.12f));
     const GLfloat hullSpecular[] = {0.32f, 0.38f, 0.42f, 1.0f};
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, hullSpecular);
     glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 38.0f);
@@ -2662,6 +2673,51 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glEnable(GL_FOG);
     glEnable(GL_LIGHTING);
 }
+
+void DrawOnlineHud(const HovercraftState& pPlayerState, int pRacerCount, unsigned int pServerTick,
+                   int pWidth, int pHeight)
+{
+    glDisable(GL_LIGHTING);
+    glDisable(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, pWidth, pHeight, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    const int speed = static_cast<int>(std::fabs(pPlayerState.mSpeed));
+    char speedLabel[24];
+    char racersLabel[24];
+    char tickLabel[32];
+    std::snprintf(speedLabel, sizeof(speedLabel), "SPEED %d", speed);
+    std::snprintf(racersLabel, sizeof(racersLabel), "RACERS %d", pRacerCount);
+    std::snprintf(tickLabel, sizeof(tickLabel), "SERVER %u", pServerTick);
+    glColor3f(0.02f, 0.05f, 0.08f);
+    glBegin(GL_QUADS);
+    glVertex2i(16, 16);
+    glVertex2i(214, 16);
+    glVertex2i(214, 92);
+    glVertex2i(16, 92);
+    glEnd();
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText("ONLINE RACE", 28, 28, 2);
+    glColor3f(0.82f, 0.9f, 0.92f);
+    DrawPixelText(speedLabel, 28, 48, 2);
+    DrawPixelText(racersLabel, 28, 66, 2);
+    glColor3f(1.0f, 0.78f, 0.12f);
+    DrawPixelText(tickLabel, pWidth - 144, 28, 2);
+
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_FOG);
+    glEnable(GL_LIGHTING);
+}
 }
 
 int main(int pArgumentCount, char* pArguments[])
@@ -3956,12 +4012,19 @@ int main(int pArgumentCount, char* pArguments[])
                        wallTexture);
             DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
             DrawCheckpointGates(courseWaypoints, checkpoints, 0, selectedTrack.mRoadHalfWidth);
+            const OnlineRacerView* localRacer = nullptr;
             for (std::size_t racerIndex = 0; racerIndex < gOnlineRacers.size(); ++racerIndex)
             {
                 const OnlineRacerView& racer = gOnlineRacers[racerIndex];
+                if (racer.mPlayerId == gLobbyPlayerId)
+                    localRacer = &racer;
                 DrawHovercraft(racer.mState, racer.mPlayerId != gLobbyPlayerId, false,
-                               CraftClass::Balanced, static_cast<int>(racerIndex) + 1);
+                               CraftClass::Balanced, static_cast<int>(racerIndex) + 1,
+                               static_cast<int>(racerIndex));
             }
+            if (localRacer != nullptr)
+                DrawOnlineHud(localRacer->mState, static_cast<int>(gOnlineRacers.size()),
+                              gOnlineRaceTick, drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;
         }
