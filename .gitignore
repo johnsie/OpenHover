@@ -1,0 +1,18 @@
+# Build output and local state
+build/
+dist/
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.pdb
+
+# Editors and OS files
+.vscode/
+.idea/
+.vs/
+*.swp
+.DS_Store
+Thumbs.db
