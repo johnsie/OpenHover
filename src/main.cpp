@@ -46,6 +46,7 @@ enum class FrontScreen
     Multiplayer,
     HostRaceSetup,
     OnlineRace,
+    DisplayNameSetup,
     HowToPlay,
     Settings,
     LocalSetup,
@@ -77,6 +78,7 @@ std::vector<std::string> gLobbyPlayers;
 std::vector<LobbyRoomView> gLobbyRooms;
 std::vector<std::string> gLobbyChatMessages;
 std::string gLobbyChatInput;
+std::string gPlayerDisplayName;
 std::string gLobbyStatus = "CONNECTING TO SERVER";
 int gLobbySelectedRoom = -1;
 int gLobbyPlayerId = 0;
@@ -88,6 +90,7 @@ int gHostPlayerCapacity = 8;
 int gHostRivalCount = 0;
 bool gHostWeaponsAllowed = true;
 bool gHostCreatePending = false;
+bool gDisplayNameSetupConnectsToLobby = false;
 int gOnlineRaceRoomId = 0;
 unsigned int gOnlineRaceTick = 0;
 std::vector<OnlineRacerView> gOnlineRacers;
@@ -209,6 +212,23 @@ const char* RivalDifficultySetupLabel(RivalDifficulty pRivalDifficulty)
 bool IsPointInRect(int pX, int pY, int pLeft, int pTop, int pWidth, int pHeight)
 {
     return pX >= pLeft && pX < pLeft + pWidth && pY >= pTop && pY < pTop + pHeight;
+}
+
+bool IsLobbyNameCharacter(char pCharacter)
+{
+    return (pCharacter >= 'A' && pCharacter <= 'Z')
+        || (pCharacter >= 'a' && pCharacter <= 'z')
+        || (pCharacter >= '0' && pCharacter <= '9')
+        || pCharacter == '_' || pCharacter == '-';
+}
+
+void AppendLobbyNameText(std::string& pName, const char* pText)
+{
+    for (const char* character = pText; *character != '\0' && pName.size() < 24; ++character)
+    {
+        if (IsLobbyNameCharacter(*character))
+            pName += *character;
+    }
 }
 
 double ControllerAxis(Sint16 pValue)
@@ -2263,13 +2283,48 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glColor3f(1.0f, 0.78f, 0.12f);
         DrawPixelText("ENTER CONFIRM  ESC BACK", pWidth / 2 - 168, pHeight - 62, 2);
     }
+    else if (pScreen == FrontScreen::DisplayNameSetup)
+    {
+        const int panelWidth = 520;
+        const int panelLeft = (pWidth - panelWidth) / 2;
+        const int panelTop = pHeight / 2 - 140;
+        glColor3f(0.07f, 0.09f, 0.12f);
+        glBegin(GL_QUADS);
+        glVertex2i(panelLeft, panelTop);
+        glVertex2i(panelLeft + panelWidth, panelTop);
+        glVertex2i(panelLeft + panelWidth, panelTop + 280);
+        glVertex2i(panelLeft, panelTop + 280);
+        glEnd();
+        glColor3f(0.2f, 0.9f, 1.0f);
+        DrawPixelText("PILOT NAME", panelLeft + 142, panelTop + 38, 4);
+        glColor3f(0.7f, 0.78f, 0.82f);
+        DrawPixelText("CHOOSE YOUR LOBBY ID", panelLeft + 118, panelTop + 84, 2);
+        glColor3f(0.03f, 0.04f, 0.06f);
+        glBegin(GL_QUADS);
+        glVertex2i(panelLeft + 42, panelTop + 116);
+        glVertex2i(panelLeft + panelWidth - 42, panelTop + 116);
+        glVertex2i(panelLeft + panelWidth - 42, panelTop + 164);
+        glVertex2i(panelLeft + 42, panelTop + 164);
+        glEnd();
+        glColor3f(1.0f, 0.78f, 0.12f);
+        DrawPixelText(gPlayerDisplayName.empty() ? "TYPE A NAME" : gPlayerDisplayName.c_str(),
+                      panelLeft + 58, panelTop + 132, 3);
+        DrawLobbyButton("SAVE", panelLeft + 172, panelTop + 196, 176, true);
+        glColor3f(0.7f, 0.78f, 0.82f);
+        DrawPixelText("LETTERS NUMBERS _ -", panelLeft + 150, panelTop + 254, 2);
+    }
     else
     {
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("SETTINGS", pWidth / 2 - 120, 90, 5);
         glColor3f(pSelection == 0 ? 1.0f : 0.82f, pSelection == 0 ? 0.78f : 0.9f,
                   pSelection == 0 ? 0.12f : 0.92f);
-        DrawPixelText("CAMERA DISTANCE", pWidth / 2 - 135, 200, 3);
+        DrawPixelText("DISPLAY NAME", pWidth / 2 - 105, 160, 3);
+        DrawPixelText(gPlayerDisplayName.empty() ? "NOT SET" : gPlayerDisplayName.c_str(),
+                      pWidth / 2 - 105, 200, 3);
+        glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.78f : 0.9f,
+                  pSelection == 1 ? 0.12f : 0.92f);
+        DrawPixelText("CAMERA DISTANCE", pWidth / 2 - 135, 245, 3);
         const char* cameraOptions[] = {"NEAR", "STANDARD", "FAR"};
         for (int option = 0; option < 3; ++option)
         {
@@ -2277,15 +2332,15 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 glColor3f(1.0f, 0.78f, 0.12f);
             else
                 glColor3f(0.82f, 0.9f, 0.92f);
-            DrawPixelText(cameraOptions[option], pWidth / 2 - 128 + option * 104, 245, 3);
+            DrawPixelText(cameraOptions[option], pWidth / 2 - 128 + option * 104, 285, 3);
         }
-        glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.78f : 0.9f,
-                  pSelection == 1 ? 0.12f : 0.92f);
-        DrawPixelText("AUDIO FEEDBACK", pWidth / 2 - 120, 335, 3);
-        DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 - 24, 380, 3);
         glColor3f(pSelection == 2 ? 1.0f : 0.82f, pSelection == 2 ? 0.78f : 0.9f,
                   pSelection == 2 ? 0.12f : 0.92f);
-        DrawPixelText("BACK", pWidth / 2 - 42, 465, 3);
+        DrawPixelText("AUDIO FEEDBACK", pWidth / 2 - 120, 375, 3);
+        DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 - 24, 420, 3);
+        glColor3f(pSelection == 3 ? 1.0f : 0.82f, pSelection == 3 ? 0.78f : 0.9f,
+                  pSelection == 3 ? 0.12f : 0.92f);
+        DrawPixelText("BACK", pWidth / 2 - 42, 505, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
         DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", pWidth / 2 - 230, pHeight - 94, 2);
         glColor3f(1.0f, 0.78f, 0.12f);
@@ -2747,21 +2802,7 @@ int main()
     TcpLobbyClient lobbyClient;
     bool lobbyHelloSent = false;
     double onlineInputSeconds = 0.0;
-    std::string lobbyDisplayName = "PILOT";
-    const char* systemUserName = SDL_getenv("USER");
-    if (systemUserName != nullptr && systemUserName[0] != '\0')
-        lobbyDisplayName = systemUserName;
-    for (char& character : lobbyDisplayName)
-    {
-        if ((character < 'A' || character > 'Z') && (character < 'a' || character > 'z')
-            && (character < '0' || character > '9') && character != '_' && character != '-')
-            character = '_';
-    }
-    const std::string sessionSuffix = "-" + std::to_string(
-        static_cast<unsigned long long>(SDL_GetPerformanceCounter() % 1000000));
-    if (lobbyDisplayName.size() + sessionSuffix.size() > 24)
-        lobbyDisplayName.resize(24 - sessionSuffix.size());
-    lobbyDisplayName += sessionSuffix;
+    std::string lobbyDisplayName;
     char preferencesFile[512] = {};
     char* preferencesDirectory = SDL_GetPrefPath("OpenHover", "OpenHover");
     if (preferencesDirectory != nullptr)
@@ -2836,8 +2877,9 @@ int main()
         FILE* preferences = std::fopen(preferencesFile, "w");
         if (preferences == nullptr)
             return;
-        std::fprintf(preferences, "%d %d %d %d %d\n", trackIndex, targetLaps,
-                     weaponsAllowed ? 1 : 0, cameraDistanceSetting, audioFeedback.Enabled() ? 1 : 0);
+        std::fprintf(preferences, "%d %d %d %d %d %s\n", trackIndex, targetLaps,
+                 weaponsAllowed ? 1 : 0, cameraDistanceSetting, audioFeedback.Enabled() ? 1 : 0,
+                 gPlayerDisplayName.c_str());
         std::fclose(preferences);
     };
     if (preferencesFile[0] != '\0')
@@ -2848,6 +2890,7 @@ int main()
         int savedWeapons = 1;
         int savedCameraDistance = 1;
         int savedAudio = 1;
+        char savedDisplayName[25] = {};
         if (preferences != nullptr
             && std::fscanf(preferences, "%d %d %d %d %d", &savedTrack, &savedLaps,
                            &savedWeapons, &savedCameraDistance, &savedAudio) == 5)
@@ -2859,6 +2902,8 @@ int main()
             cameraDistanceSetting = savedCameraDistance >= 0 && savedCameraDistance <= 2
                 ? savedCameraDistance : 1;
             audioFeedback.SetEnabled(savedAudio != 0);
+            if (std::fscanf(preferences, "%24s", savedDisplayName) == 1)
+                gPlayerDisplayName = savedDisplayName;
         }
         if (preferences != nullptr)
             std::fclose(preferences);
@@ -2954,9 +2999,29 @@ int main()
     const auto connectLobby = [&]()
     {
         leaveLobby();
+        const std::string sessionSuffix = "-" + std::to_string(
+            static_cast<unsigned long long>(SDL_GetPerformanceCounter() % 1000000));
+        lobbyDisplayName = gPlayerDisplayName;
+        if (lobbyDisplayName.size() + sessionSuffix.size() > 24)
+            lobbyDisplayName.resize(24 - sessionSuffix.size());
+        lobbyDisplayName += sessionSuffix;
         SDL_StartTextInput();
         gLobbyStatus = lobbyClient.Connect("outiva.com", 9700)
             ? "CONNECTING" : "SERVER UNAVAILABLE";
+    };
+    const auto openMultiplayer = [&]()
+    {
+        if (gPlayerDisplayName.empty())
+        {
+            gDisplayNameSetupConnectsToLobby = true;
+            frontScreen = FrontScreen::DisplayNameSetup;
+            SDL_StartTextInput();
+        }
+        else
+        {
+            frontScreen = FrontScreen::Multiplayer;
+            connectLobby();
+        }
     };
     const auto updateLobby = [&]()
     {
@@ -3053,8 +3118,7 @@ int main()
                         }
                         else if (option == 1)
                         {
-                            frontScreen = FrontScreen::Multiplayer;
-                            connectLobby();
+                            openMultiplayer();
                         }
                         else if (option == 2)
                             frontScreen = FrontScreen::HowToPlay;
@@ -3105,6 +3169,12 @@ int main()
                         gLobbySelectedRoom = std::min(static_cast<int>(gLobbyRooms.size()) - 1,
                             std::max(0, (mouseY - (top + 58)) / 38));
                     }
+                    else if (IsPointInRect(mouseX, mouseY, chatLeft + chatWidth - 76, inputTop - 5, 76, 42)
+                             && !gLobbyChatInput.empty())
+                    {
+                        if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
+                            gLobbyChatInput.clear();
+                    }
                     else if (IsPointInRect(mouseX, mouseY, chatLeft, inputTop, chatWidth, 32))
                         SDL_StartTextInput();
                 }
@@ -3134,18 +3204,42 @@ int main()
                     frontScreen = FrontScreen::Welcome;
                 else if (frontScreen == FrontScreen::Settings)
                 {
-                    if (mouseY >= 220 && mouseY < 280)
+                    if (mouseY >= 130 && mouseY < 220)
+                    {
+                        gDisplayNameSetupConnectsToLobby = false;
+                        frontScreen = FrontScreen::DisplayNameSetup;
+                        SDL_StartTextInput();
+                    }
+                    else if (mouseY >= 260 && mouseY < 320)
                     {
                         cameraDistanceSetting = std::max(0, std::min(2, (mouseX - (drawableWidth / 2 - 150)) / 104));
                         savePreferences();
                     }
-                    else if (mouseY >= 330 && mouseY < 410)
+                    else if (mouseY >= 370 && mouseY < 450)
                     {
                         audioFeedback.SetEnabled(!audioFeedback.Enabled());
                         savePreferences();
                     }
-                    else if (mouseY >= 440 && mouseY < 530)
+                    else if (mouseY >= 480 && mouseY < 570)
                         frontScreen = FrontScreen::Welcome;
+                }
+                else if (frontScreen == FrontScreen::DisplayNameSetup)
+                {
+                    const int panelLeft = (drawableWidth - 520) / 2;
+                    const int panelTop = drawableHeight / 2 - 140;
+                    if (IsPointInRect(mouseX, mouseY, panelLeft + 172, panelTop + 196, 176, 42)
+                        && !gPlayerDisplayName.empty())
+                    {
+                        savePreferences();
+                        SDL_StopTextInput();
+                        if (gDisplayNameSetupConnectsToLobby)
+                        {
+                            frontScreen = FrontScreen::Multiplayer;
+                            connectLobby();
+                        }
+                        else
+                            frontScreen = FrontScreen::Settings;
+                    }
                 }
                 else if (frontScreen == FrontScreen::LocalSetup)
                 {
@@ -3212,11 +3306,16 @@ int main()
                     gLobbyChatInput += event.text.text;
                 continue;
             }
+            if (frontScreen == FrontScreen::DisplayNameSetup && event.type == SDL_TEXTINPUT)
+            {
+                AppendLobbyNameText(gPlayerDisplayName, event.text.text);
+                continue;
+            }
             if (frontScreen != FrontScreen::RaceSetup)
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::OnlineRace || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
+                    if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::OnlineRace || frontScreen == FrontScreen::DisplayNameSetup || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
                         || frontScreen == FrontScreen::LocalSetup)
                     {
                         if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup)
@@ -3251,6 +3350,24 @@ int main()
                             % static_cast<int>(gLobbyRooms.size());
                     else if (event.key.keysym.sym == SDLK_DOWN && !gLobbyRooms.empty())
                         gLobbySelectedRoom = (gLobbySelectedRoom + 1) % static_cast<int>(gLobbyRooms.size());
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::DisplayNameSetup)
+                {
+                    if (event.key.keysym.sym == SDLK_BACKSPACE && !gPlayerDisplayName.empty())
+                        gPlayerDisplayName.erase(gPlayerDisplayName.size() - 1);
+                    else if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                             && !gPlayerDisplayName.empty())
+                    {
+                        savePreferences();
+                        SDL_StopTextInput();
+                        if (gDisplayNameSetupConnectsToLobby)
+                        {
+                            frontScreen = FrontScreen::Multiplayer;
+                            connectLobby();
+                        }
+                        else
+                            frontScreen = FrontScreen::Settings;
+                    }
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::HostRaceSetup)
                 {
@@ -3297,23 +3414,31 @@ int main()
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_UP)
-                    settingsSelection = (settingsSelection + 2) % 3;
+                    settingsSelection = (settingsSelection + 3) % 4;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_DOWN)
-                    settingsSelection = (settingsSelection + 1) % 3;
+                    settingsSelection = (settingsSelection + 1) % 4;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
                 {
                     const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
-                    if (settingsSelection == 0)
+                    if (settingsSelection == 1)
                         cameraDistanceSetting = (cameraDistanceSetting + direction + 3) % 3;
-                    else if (settingsSelection == 1)
+                    else if (settingsSelection == 2)
                         audioFeedback.SetEnabled(!audioFeedback.Enabled());
                     savePreferences();
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
-                         && settingsSelection == 2)
+                    && settingsSelection == 0)
+                {
+                    gDisplayNameSetupConnectsToLobby = false;
+                    frontScreen = FrontScreen::DisplayNameSetup;
+                    SDL_StartTextInput();
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
+                         && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                         && settingsSelection == 3)
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::LocalSetup)
                 {
@@ -3350,8 +3475,7 @@ int main()
                         }
                         else if (frontSelection == 1)
                         {
-                            frontScreen = FrontScreen::Multiplayer;
-                            connectLobby();
+                            openMultiplayer();
                         }
                         else if (frontSelection == 2)
                             frontScreen = FrontScreen::HowToPlay;
