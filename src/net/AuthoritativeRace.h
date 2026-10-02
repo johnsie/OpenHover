@@ -3,10 +3,14 @@
 #define OPENHOVER_AUTHORITATIVE_RACE_H
 
 #include "Course.h"
+#include "BoostPad.h"
+#include "HazardZone.h"
 #include "Hovercraft.h"
 #include "LapTiming.h"
 #include "Lobby.h"
+#include "Mine.h"
 #include "RacePosition.h"
+#include "RaisedSection.h"
 
 #include <memory>
 #include <vector>
@@ -66,6 +70,10 @@ private:
     unsigned int mTick = 0;
     int mTargetLaps = 0;
     std::unique_ptr<Course> mCourse;
+    std::vector<BoostPad> mBoostPads;
+    std::vector<HazardZone> mHazardZones;
+    std::vector<Mine> mMines;
+    std::vector<RaisedSection> mRaisedSections;
     std::vector<Racer> mRacers;
 };
 

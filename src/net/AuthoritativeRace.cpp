@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "AuthoritativeRace.h"
 
+#include "RacerCollision.h"
 #include "TrackDefinition.h"
 #include "WallCollision.h"
 
@@ -16,6 +17,10 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
     mRacers.clear();
     const TrackDefinition& track = tracks[pTrackIndex];
     mCourse.reset(new Course(track.mWaypoints, track.mRoadHalfWidth));
+    mBoostPads = track.mBoostPads;
+    mHazardZones = track.mHazardZones;
+    mMines = track.mMines;
+    mRaisedSections = track.mRaisedSections;
     const RaceGate finish = track.Finish();
     const RaceGate next = track.mWaypoints.size() > 1 ? track.mWaypoints[1] : finish;
     double forwardX = next.mX - finish.mX;
@@ -72,11 +77,38 @@ void AuthoritativeRace::Step()
     if (!mActive)
         return;
     for (Racer& racer : mRacers)
-    {
         racer.mHovercraft.Step(racer.mInput, 1.0 / 120.0);
+
+    for (std::size_t first = 0; first < mRacers.size(); ++first)
+    {
+        for (std::size_t second = first + 1; second < mRacers.size(); ++second)
+        {
+            HovercraftState firstState = mRacers[first].mHovercraft.State();
+            HovercraftState secondState = mRacers[second].mHovercraft.State();
+            if (ResolveRacerCollision(firstState, secondState))
+            {
+                mRacers[first].mHovercraft.Reset(firstState);
+                mRacers[second].mHovercraft.Reset(secondState);
+            }
+        }
+    }
+
+    for (Racer& racer : mRacers)
+    {
         HovercraftState state = racer.mHovercraft.State();
-        if (ResolveCourseWallCollision(state, *mCourse))
-            racer.mHovercraft.Reset(state);
+        ResolveCourseWallCollision(state, *mCourse);
+        for (const BoostPad& pad : mBoostPads)
+            ApplyBoostPad(state, pad);
+        for (const RaisedSection& section : mRaisedSections)
+        {
+            LandOnRaisedSection(state, section);
+            ResolveRaisedSectionCollision(state, section);
+        }
+        for (Mine& mine : mMines)
+            ApplyMine(state, mine);
+        for (const HazardZone& zone : mHazardZones)
+            ApplyHazardZone(state, zone, 1.0 / 120.0);
+        racer.mHovercraft.Reset(state);
         racer.mRace.Update(state.mX, state.mY, 1.0 / 120.0);
         racer.mLapTimer.Update(racer.mRace.Progress());
     }
@@ -87,6 +119,10 @@ void AuthoritativeRace::Stop()
 {
     mActive = false;
     mCourse.reset();
+    mBoostPads.clear();
+    mHazardZones.clear();
+    mMines.clear();
+    mRaisedSections.clear();
     mRacers.clear();
     mTargetLaps = 0;
 }

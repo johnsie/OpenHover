@@ -290,6 +290,43 @@ void AppendLobbyNameText(std::string& pName, const char* pText)
     }
 }
 
+void AppendOnlineChatKey(std::string& pText, SDL_Keycode pKey, Uint16 pModifiers)
+{
+    if (pText.size() >= 120)
+        return;
+    const bool shifted = (pModifiers & KMOD_SHIFT) != 0;
+    char character = '\0';
+    if (pKey >= SDLK_a && pKey <= SDLK_z)
+        character = static_cast<char>(pKey - SDLK_a + (shifted ? 'A' : 'a'));
+    else if (pKey >= SDLK_0 && pKey <= SDLK_9)
+    {
+        static const char shiftedDigits[] = ")!@#$%^&*(";
+        character = shifted ? shiftedDigits[pKey - SDLK_0] : static_cast<char>(pKey);
+    }
+    else if (pKey == SDLK_SPACE)
+        character = ' ';
+    else
+    {
+        switch (pKey)
+        {
+        case SDLK_MINUS: character = shifted ? '_' : '-'; break;
+        case SDLK_EQUALS: character = shifted ? '+' : '='; break;
+        case SDLK_LEFTBRACKET: character = shifted ? '{' : '['; break;
+        case SDLK_RIGHTBRACKET: character = shifted ? '}' : ']'; break;
+        case SDLK_BACKSLASH: character = shifted ? '|' : '\\'; break;
+        case SDLK_SEMICOLON: character = shifted ? ':' : ';'; break;
+        case SDLK_QUOTE: character = shifted ? '"' : '\''; break;
+        case SDLK_COMMA: character = shifted ? '<' : ','; break;
+        case SDLK_PERIOD: character = shifted ? '>' : '.'; break;
+        case SDLK_SLASH: character = shifted ? '?' : '/'; break;
+        case SDLK_BACKQUOTE: character = shifted ? '~' : '`'; break;
+        default: break;
+        }
+    }
+    if (character != '\0')
+        pText += character;
+}
+
 double ControllerAxis(Sint16 pValue)
 {
     const double normalized = pValue < 0 ? pValue / 32768.0 : pValue / 32767.0;
@@ -3645,13 +3682,6 @@ int main(int pArgumentCount, char* pArguments[])
                     gLobbyChatInput += event.text.text;
                 continue;
             }
-            if (frontScreen == FrontScreen::OnlineRace && gOnlineChatInputFocused
-                && event.type == SDL_TEXTINPUT)
-            {
-                if (gOnlineChatInput.size() + std::strlen(event.text.text) <= 120)
-                    gOnlineChatInput += event.text.text;
-                continue;
-            }
             if (frontScreen == FrontScreen::DisplayNameSetup && event.type == SDL_TEXTINPUT)
             {
                 AppendLobbyNameText(gPlayerDisplayName, event.text.text);
@@ -3717,6 +3747,8 @@ int main(int pArgumentCount, char* pArguments[])
                         if (!gOnlineChatInput.empty() && lobbyClient.SendCommand("CHAT " + gOnlineChatInput))
                             gOnlineChatInput.clear();
                     }
+                    else if (gOnlineChatInputFocused)
+                        AppendOnlineChatKey(gOnlineChatInput, event.key.keysym.sym, event.key.keysym.mod);
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::DisplayNameSetup)
                 {
