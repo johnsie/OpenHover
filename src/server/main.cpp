@@ -413,7 +413,7 @@ int main(int pArgumentCount, char* pArguments[])
     }
 
     std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
-              << ") listening on TCP port " << port << '\n';
+              << ") listening on TCP port " << port << std::endl;
     Lobby lobby;
     std::map<LobbyRoomId, AuthoritativeRace> races;
     std::vector<ClientConnection> clients;
