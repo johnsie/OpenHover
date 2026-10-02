@@ -27,6 +27,6 @@ deploy_race_server:
     - job: package_race_server
       artifacts: true
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == "main"'
   script:
     - sudo -n ./scripts/install-race-server.sh build-raceserver/packages/*.deb
