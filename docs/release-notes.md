@@ -3,6 +3,15 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.19
+
+- The online race HUD no longer draws the leaderboard on top of the course map: the leaders list
+  now sits below the map and the place readout, and an unused panel behind the map is gone.
+- New **HUD Text** setting (Normal or Large) on the Settings screen. Large makes the race
+  readouts bigger: speed, distance to the next gate, lap, time, lap time, best, split, and place in
+  local races, and the equivalent lap, time, speed, and lap-time readouts in online races. The
+  choice is saved. Other text (menus, chat, the leaderboard) is unchanged.
+
 ## 0.1.18
 
 - Small windows and layout fixes. On a window about 600 pixels tall (for example 1024 by 600) the
@@ -162,7 +171,7 @@ internal refactors. See the [roadmap](roadmap.md) for what is planned next.
   local races.
 - Gamepad steering and throttle (stick and triggers) cannot be remapped, and the race HUD does not
   yet show gamepad button prompts.
-- Colour, contrast, and text-scale options are not available yet.
+- Colour and contrast options are not available yet; HUD text can be made larger, but menu and chat text cannot.
 - The ghost replays inputs only, so a run disturbed by rival collisions or missile hits can drift
   from its recording.
 - Rival names are shown in local results and the online leaderboard but not elsewhere.

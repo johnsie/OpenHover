@@ -2327,6 +2327,8 @@ std::string HostTrackName(int pIndex)
 bool gNewGhostBest = false;
 // Which ghost races alongside the player: 0 off, 1 best completed run, 2 last completed run.
 int gGhostMode = 1;
+// Larger race readouts (lap, time, speed) for players who find the default text small.
+bool gHudTextLarge = false;
 // The last completed run (without recovery) for the track and craft class it was driven on.
 struct LastRun
 {
@@ -3746,13 +3748,13 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     {
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("SETTINGS", pWidth / 2 - 120, 60, 5);
-        const char* settingLabels[] = {"DISPLAY NAME", "CAMERA DISTANCE", "AUDIO FEEDBACK",
+        const char* settingLabels[] = {"DISPLAY NAME", "CAMERA DISTANCE", "HUD TEXT", "AUDIO FEEDBACK",
                                        "MENU VOLUME", "RACE VOLUME", "BACK"};
-        for (int row = 0; row < 6; ++row)
+        for (int row = 0; row < 7; ++row)
         {
             int boxTop = 0;
             int boxHeight = 0;
-            LocalSetupRowGeometry(pHeight, 6, row, boxTop, boxHeight);
+            LocalSetupRowGeometry(pHeight, 7, row, boxTop, boxHeight);
             const int textTop = boxTop + (boxHeight - 40);
             const bool selected = row == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f, selected ? 0.62f : 0.14f);
@@ -3784,11 +3786,13 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 }
             }
             else if (row == 2)
+                DrawPixelText(gHudTextLarge ? "LARGE" : "NORMAL", pWidth / 2 + 80, textTop + 16, 3);
+            else if (row == 3)
                 DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 + 120, textTop + 16, 3);
-            else if (row == 3 || row == 4)
+            else if (row == 4 || row == 5)
             {
                 char volumeLabel[16];
-                std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", row == 3 ? pMenuVolume : pRaceVolume);
+                std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", row == 4 ? pMenuVolume : pRaceVolume);
                 DrawPixelText(volumeLabel, pWidth / 2 + 120, textTop + 16, 3);
             }
         }
@@ -3890,7 +3894,7 @@ void DrawRouteCue(const HovercraftState& pPlayerState, const RaceGate& pActiveGa
     char gateLabel[24];
     std::snprintf(gateLabel, sizeof(gateLabel), "NEXT %d", gateDistance);
     glColor3f(0.2f, 0.9f, 1.0f);
-    DrawPixelText(gateLabel, 300, 45, 2);
+    DrawPixelText(gateLabel, 300, 27 + (gHudTextLarge ? 27 : 18), gHudTextLarge ? 3 : 2);
 
     const double targetHeading = GetGateDirection(pPlayerState, pActiveGate);
     const double headingOffset = targetHeading - pPlayerState.mHeading;
@@ -3951,12 +3955,14 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     char speedLabel[24];
     std::snprintf(speedLabel, sizeof(speedLabel), "SPEED %d", speed);
     glColor3f(0.82f, 0.9f, 0.92f);
-    DrawPixelText(speedLabel, 300, 27, 2);
+    const int hudScale = gHudTextLarge ? 3 : 2;
+    const int hudStep = gHudTextLarge ? 27 : 18;
+    DrawPixelText(speedLabel, 300, 27, hudScale);
     DrawRouteCue(pPlayerState, pActiveGate, pWidth, pHeight);
     if (SDL_GetTicks() < gGhostToastUntil && !gGhostToast.empty())
     {
         glColor3f(0.6f, 0.86f, 1.0f);
-        DrawPixelText(gGhostToast.c_str(), 300, 76, 2);
+        DrawPixelText(gGhostToast.c_str(), 300, 27 + 2 * (gHudTextLarge ? 27 : 18) + 13, 2);
     }
     else if (gGhostGapShown)
     {
@@ -3968,7 +3974,7 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
             glColor3f(0.3f, 1.0f, 0.5f);
         else
             glColor3f(1.0f, 0.6f, 0.25f);
-        DrawPixelText(gapLabel, 300, 76, 2);
+        DrawPixelText(gapLabel, 300, 27 + 2 * (gHudTextLarge ? 27 : 18) + 13, 2);
     }
 
     const int resourceLeft = 24;
@@ -4030,13 +4036,13 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
                   lastSplitSeconds / 60, lastSplitSeconds % 60);
     std::snprintf(positionLabel, sizeof(positionLabel), "PLACE %d OF %d", pPlayerPosition, pCompetitorCount);
     glColor3f(0.82f, 0.9f, 0.92f);
-    DrawPixelText(lapLabel, pWidth / 2 + 36, 27, 2);
-    DrawPixelText(timeLabel, pWidth / 2 + 36, 45, 2);
-    DrawPixelText(currentLapLabel, pWidth / 2 + 36, 63, 2);
-    DrawPixelText(bestLapLabel, pWidth / 2 + 36, 81, 2);
-    DrawPixelText(splitLabel, pWidth / 2 + 36, 99, 2);
+    DrawPixelText(lapLabel, pWidth / 2 + 36, 27, hudScale);
+    DrawPixelText(timeLabel, pWidth / 2 + 36, 27 + hudStep, hudScale);
+    DrawPixelText(currentLapLabel, pWidth / 2 + 36, 27 + 2 * hudStep, hudScale);
+    DrawPixelText(bestLapLabel, pWidth / 2 + 36, 27 + 3 * hudStep, hudScale);
+    DrawPixelText(splitLabel, pWidth / 2 + 36, 27 + 4 * hudStep, hudScale);
     glColor3f(1.0f, 0.78f, 0.12f);
-    DrawPixelText(positionLabel, pWidth / 2 + 36, 117, 2);
+    DrawPixelText(positionLabel, pWidth / 2 + 36, 27 + 5 * hudStep, hudScale);
 
     const int pointerX = pWidth / 2;
     const int pointerY = pHeight - 86;
@@ -4322,27 +4328,39 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
                   bestLapSeconds / 60, bestLapSeconds % 60);
     std::snprintf(positionLabel, sizeof(positionLabel), "PLACE %d OF %d",
                   pPlayer.mPosition, pRacerCount);
-    DrawOnlineHudPanel(18, 18, 170, gOnlineChampionshipEventCount > 0 ? 92 : 72);
-    DrawOnlineHudPanel(pWidth - 180, 18, 162, 42);
+    {
+        // Backing panel for the top-left readouts, sized for the text size in use.
+        const bool cup = gOnlineChampionshipEventCount > 0;
+        const int panelWidth = gHudTextLarge ? (cup ? 340 : 212) : 170;
+        const int panelHeight = gHudTextLarge ? (cup ? 4 : 3) * 28 + 12 : (cup ? 92 : 72);
+        DrawOnlineHudPanel(18, 18, panelWidth, panelHeight);
+    }
     DrawOnlineHudPanel(18, pHeight - 88, 170, 70);
-    DrawOnlineHudPanel(pWidth - 180, pHeight - 70, 162, 52);
+    // Large HUD text widens the bottom-right panel for the live and best lap times.
+    const int onlineScale = gHudTextLarge ? 3 : 2;
+    const int onlineStep = gHudTextLarge ? 28 : 20;
+    const int lapPanelWidth = gHudTextLarge ? 214 : 162;
+    const int lapPanelHeight = gHudTextLarge ? 74 : 52;
+    DrawOnlineHudPanel(pWidth - lapPanelWidth - 18, pHeight - lapPanelHeight - 18, lapPanelWidth,
+                       lapPanelHeight);
     glColor3f(0.2f, 0.9f, 1.0f);
-    DrawPixelText("ONLINE", 30, 30, 2);
+    DrawPixelText("ONLINE", 30, 30, onlineScale);
     glColor3f(0.82f, 0.9f, 0.92f);
-    DrawPixelText(lapLabel, 30, 50, 2);
-    DrawPixelText(timeLabel, 30, 70, 2);
+    DrawPixelText(lapLabel, 30, 30 + onlineStep, onlineScale);
+    DrawPixelText(timeLabel, 30, 30 + 2 * onlineStep, onlineScale);
     if (gOnlineChampionshipEventCount > 0)
     {
         char championshipLabel[32];
         std::snprintf(championshipLabel, sizeof(championshipLabel), "CUP %d OF %d  %d PTS",
                       gOnlineChampionshipEvent, gOnlineChampionshipEventCount,
                       gOnlineChampionshipPoints);
-        DrawPixelText(championshipLabel, 30, 90, 2);
+        DrawPixelText(championshipLabel, 30, 30 + 3 * onlineStep, onlineScale);
     }
     DrawPixelText("SPEED", 30, pHeight - 78, 2);
     DrawPixelText(speedLabel, 30, pHeight - 56, 4);
-    DrawPixelText(currentLapLabel, pWidth - 168, pHeight - 58, 2);
-    DrawPixelText(bestLapLabel, pWidth - 168, pHeight - 36, 2);
+    DrawPixelText(currentLapLabel, pWidth - lapPanelWidth - 6, pHeight - lapPanelHeight - 6, onlineScale);
+    DrawPixelText(bestLapLabel, pWidth - lapPanelWidth - 6,
+                  pHeight - lapPanelHeight - 6 + (gHudTextLarge ? 28 : 22), onlineScale);
     DrawRouteCue(pPlayer.mState, pActiveGate, pWidth, pHeight);
     DrawCourseMap(pWaypoints, pPlayer.mState, pRivalStates, true, pActiveGate, pWidth);
     const Uint32 cueTicks = SDL_GetTicks();
@@ -4467,7 +4485,8 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     const int leaderboardCount = std::min(8, static_cast<int>(gOnlineRacers.size()));
     if (leaderboardCount > 0)
     {
-        const int leaderboardTop = 72;
+        // Below the course map and the place readout, which share the top-right corner.
+        const int leaderboardTop = 196;
         DrawOnlineHudPanel(pWidth - 216, leaderboardTop, 198, 22 + leaderboardCount * 17);
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("LEADERS", pWidth - 204, leaderboardTop + 7, 2);
@@ -4904,7 +4923,8 @@ int main(int pArgumentCount, char* pArguments[])
                  brakingAssistEnabled ? 1 : 0, static_cast<int>(playerCraftClass),
                  static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
                  static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5));
-        std::fprintf(preferences, "%d %d\n", static_cast<int>(gCameraMotion), gGhostMode);
+        std::fprintf(preferences, "%d %d %d\n", static_cast<int>(gCameraMotion), gGhostMode,
+                     gHudTextLarge ? 1 : 0);
         std::fclose(preferences);
     };
     char bindingsFile[512] = {};
@@ -5020,6 +5040,9 @@ int main(int pArgumentCount, char* pArguments[])
                 int savedGhostVisible = 1;
                 if (std::fscanf(preferences, "%d", &savedGhostVisible) == 1)
                     gGhostMode = savedGhostVisible >= 0 && savedGhostVisible <= 2 ? savedGhostVisible : 1;
+                int savedHudLarge = 0;
+                if (std::fscanf(preferences, "%d", &savedHudLarge) == 1)
+                    gHudTextLarge = savedHudLarge != 0;
             }
         }
         if (preferences != nullptr)
@@ -6184,11 +6207,11 @@ int main(int pArgumentCount, char* pArguments[])
                 else if (frontScreen == FrontScreen::Settings)
                 {
                     int clickedRow = -1;
-                    for (int row = 0; row < 6; ++row)
+                    for (int row = 0; row < 7; ++row)
                     {
                         int rowTop = 0;
                         int rowHeight = 0;
-                        LocalSetupRowGeometry(drawableHeight, 6, row, rowTop, rowHeight);
+                        LocalSetupRowGeometry(drawableHeight, 7, row, rowTop, rowHeight);
                         if (IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250, rowTop, 500, rowHeight))
                             clickedRow = row;
                     }
@@ -6213,24 +6236,29 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                     else if (clickedRow == 2)
                     {
-                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                        gHudTextLarge = !gHudTextLarge;
                         savePreferences();
                     }
                     else if (clickedRow == 3)
+                    {
+                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                        savePreferences();
+                    }
+                    else if (clickedRow == 4)
                     {
                         const int volume = (static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5) + 25)
                             % 125;
                         audioFeedback.SetMenuVolume(volume / 100.0);
                         savePreferences();
                     }
-                    else if (clickedRow == 4)
+                    else if (clickedRow == 5)
                     {
                         const int volume = (static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5) + 25)
                             % 125;
                         audioFeedback.SetRaceVolume(volume / 100.0);
                         savePreferences();
                     }
-                    else if (clickedRow == 5)
+                    else if (clickedRow == 6)
                         frontScreen = FrontScreen::Welcome;
                 }
                 else if (frontScreen == FrontScreen::DisplayNameSetup)
@@ -6561,10 +6589,10 @@ int main(int pArgumentCount, char* pArguments[])
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_UP)
-                    settingsSelection = (settingsSelection + 5) % 6;
+                    settingsSelection = (settingsSelection + 6) % 7;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_DOWN)
-                    settingsSelection = (settingsSelection + 1) % 6;
+                    settingsSelection = (settingsSelection + 1) % 7;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
                 {
@@ -6572,13 +6600,15 @@ int main(int pArgumentCount, char* pArguments[])
                     if (settingsSelection == 1)
                         cameraDistanceSetting = (cameraDistanceSetting + direction + 3) % 3;
                     else if (settingsSelection == 2)
-                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                        gHudTextLarge = !gHudTextLarge;
                     else if (settingsSelection == 3)
+                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                    else if (settingsSelection == 4)
                     {
                         const double change = direction * 0.1;
                         audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + change);
                     }
-                    else if (settingsSelection == 4)
+                    else if (settingsSelection == 5)
                     {
                         const double change = direction * 0.1;
                         audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + change);
@@ -6595,7 +6625,7 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
-                         && settingsSelection == 5)
+                         && settingsSelection == 6)
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::LocalSetup)
                 {
