@@ -17,6 +17,7 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | Path | Origin | Authors | Licence status | Notes |
 | --- | --- | --- | --- | --- |
 | `README.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
+| `assets/screenshots/harbor-loop-gameplay.png` | Original | Maintainer, with AI assistance (GitHub Copilot) | CC BY 4.0 | Screenshot captured from the OpenHover runtime |
 | `.gitignore` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
 | `PROVENANCE.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | this ledger |
 | `CMakeLists.txt` | Original | Maintainer, with AI assistance (Claude, GitHub Copilot) | MIT OR Apache-2.0 | SDL2/OpenGL interactive executable |

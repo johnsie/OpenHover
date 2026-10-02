@@ -21,6 +21,8 @@ none of its code: SHA-256, a gzip decoder, wire-format helpers, a track catalogu
 verified downloader, each with tests. The project also has an original 3D SDL2/OpenGL test
 arena with hovercraft controls, checkpoints, and lap timing. Build and test with:
 
+![Harbor Loop race start](assets/screenshots/harbor-loop-gameplay.png)
+
 ```
 cmake -S . -B build && cmake --build build && ctest --test-dir build
 ```
