@@ -12,7 +12,7 @@ int main()
         return 1;
     }
 
-    start.Update(1.0);
+    start.Update(2.0);
     if (!start.Ready())
     {
         std::cerr << "race started before an explicit start\n";
@@ -20,28 +20,29 @@ int main()
     }
 
     start.Begin();
-    if (start.Ready() || !start.CountdownActive() || start.LightsLit() != 1)
+    if (start.Ready() || !start.CountdownActive() || start.LightsLit() != 1
+        || start.SecondsRemaining() != 6)
     {
         std::cerr << "countdown did not begin at its first light\n";
         return 1;
     }
 
-    start.Update(1.0);
-    if (start.Started() || start.LightsLit() != 2)
+    start.Update(2.0);
+    if (start.Started() || start.LightsLit() != 2 || start.SecondsRemaining() != 4)
     {
         std::cerr << "countdown did not advance to its second light\n";
         return 1;
     }
 
-    start.Update(1.0);
-    if (start.Started() || start.LightsLit() != 3)
+    start.Update(2.0);
+    if (start.Started() || start.LightsLit() != 3 || start.SecondsRemaining() != 2)
     {
         std::cerr << "countdown did not advance to its third light\n";
         return 1;
     }
 
-    start.Update(1.0);
-    if (!start.Started() || start.LightsLit() != 0)
+    start.Update(2.0);
+    if (!start.Started() || start.LightsLit() != 0 || start.SecondsRemaining() != 0)
     {
         std::cerr << "countdown did not start the race\n";
         return 1;

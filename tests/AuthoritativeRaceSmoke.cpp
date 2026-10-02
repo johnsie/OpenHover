@@ -18,6 +18,7 @@ int main()
     RaceInputCommand input;
     input.mPlayerId = 11;
     input.mThrottle = 1.0;
+    input.mFire = true;
     if (!race.SubmitInput(input) || race.SubmitInput({99, 1.0, 0.0, false, false}))
     {
         std::cerr << "authoritative race did not validate player inputs\n";
@@ -25,11 +26,18 @@ int main()
     }
     for (int step = 0; step < 120; ++step)
         race.Step();
+    if (race.Snapshot().mRacers[0].mState.mSpeed != 0.0)
+    {
+        std::cerr << "authoritative racer moved before the start countdown finished\n";
+        return 1;
+    }
+    for (int step = 0; step < 720; ++step)
+        race.Step();
     const RaceSnapshot snapshot = race.Snapshot();
-    if (snapshot.mTick != 120 || snapshot.mTargetLaps != 3 || snapshot.mRacers.size() != 2
+    if (snapshot.mTick != 840 || snapshot.mTargetLaps != 3 || snapshot.mRacers.size() != 2
         || snapshot.mRacers[0].mState.mSpeed <= 0.0 || snapshot.mRacers[1].mState.mSpeed != 0.0
         || snapshot.mRacers[0].mProgress.mElapsedSeconds <= 0.0 || snapshot.mRacers[0].mPosition != 1
-        || snapshot.mRacers[1].mPosition != 2)
+        || snapshot.mRacers[1].mPosition != 2 || snapshot.mMissiles.empty())
     {
         std::cerr << "authoritative race did not advance only the submitted input\n";
         return 1;
@@ -63,6 +71,13 @@ int main()
     if (race.Active() || !race.Snapshot().mRacers.empty())
     {
         std::cerr << "authoritative race did not stop cleanly\n";
+        return 1;
+    }
+    AuthoritativeRace rivalRace;
+    if (!rivalRace.Start({11}, 0, 3, false, 2, RaceMode::SingleRace)
+        || rivalRace.Snapshot().mRacers.size() != 3)
+    {
+        std::cerr << "authoritative race did not create configured AI rivals\n";
         return 1;
     }
     return 0;

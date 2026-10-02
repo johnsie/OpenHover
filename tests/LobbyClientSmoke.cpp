@@ -142,7 +142,7 @@ int main(int pArgumentCount, char* pArguments[])
         guest.TakeMessages();
     }
     const bool guestJoined = roomCreated && guest.SendCommand("JOIN 1")
-        && TickUntilContaining(guest, "|R,1,Smoke race,1,2,2,");
+        && TickUntilContaining(guest, "|R,1,Harbor Loop,1,2,2,");
     const bool raceStarted = guestJoined && host.SendCommand("START 1")
         && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
     const bool raceHudReceived = raceStarted && TickUntilPrefix(host, "RACEHUD 1|3|");

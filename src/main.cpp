@@ -78,9 +78,18 @@ struct OnlineRacerView
 {
     int mPlayerId = 0;
     HovercraftState mState;
+    CraftClass mCraftClass = CraftClass::Balanced;
+    HovercraftState mPreviousState;
+    bool mHasPreviousSnapshot = false;
     RaceProgress mProgress;
     LapTiming mLapTiming;
     int mPosition = 0;
+};
+
+struct OnlineMissileView
+{
+    int mPlayerId = 0;
+    HovercraftState mState;
 };
 
 std::vector<LobbyPlayerView> gLobbyPlayers;
@@ -110,8 +119,27 @@ int gOnlineRaceRoomId = 0;
 unsigned int gOnlineRaceTick = 0;
 int gOnlineTargetLaps = 0;
 std::vector<OnlineRacerView> gOnlineRacers;
+Uint32 gOnlineRaceSnapshotTicks = 0;
+std::vector<OnlineMissileView> gOnlineMissiles;
+std::vector<bool> gOnlineMineTriggered;
 double gOnlineHudElapsedSeconds = 0.0;
 Uint32 gOnlineHudSnapshotTicks = 0;
+bool gOnlineRecoveryRequested = false;
+int gOnlineStartLights = 0;
+bool gOnlineCountdownActive = false;
+int gOnlineCountdownSeconds = 0;
+int gOnlineLastCheckpoint = -1;
+int gOnlineLastCompletedLaps = -1;
+bool gOnlineCheckpointCue = false;
+bool gOnlineHasBoostSnapshot = false;
+bool gOnlineBoostActive = false;
+bool gOnlineSpinOutActive = false;
+bool gOnlineBoostCue = false;
+bool gOnlineImpactCue = false;
+bool gOnlineRaceFinished = false;
+int gOnlineChampionshipEvent = 0;
+int gOnlineChampionshipEventCount = 0;
+int gOnlineChampionshipPoints = 0;
 
 std::vector<std::string> SplitLobbyField(const std::string& pText, char pDelimiter)
 {
@@ -176,30 +204,118 @@ bool ParseRaceSnapshot(const std::string& pMessage)
     if (roomId <= 0 || tick < 0)
         return false;
     std::vector<OnlineRacerView> racers;
+    std::vector<OnlineMissileView> missiles;
+    std::vector<bool> mineTriggered;
     for (std::size_t index = 2; index < entries.size(); ++index)
     {
         const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
-        if (fields.size() != 6)
+        if (fields.size() == 10 && fields[0] == "R")
+        {
+            OnlineRacerView racer;
+            racer.mPlayerId = std::atoi(fields[1].c_str());
+            racer.mState.mX = std::strtod(fields[2].c_str(), nullptr);
+            racer.mState.mY = std::strtod(fields[3].c_str(), nullptr);
+            racer.mState.mHeading = std::strtod(fields[4].c_str(), nullptr);
+            racer.mState.mTravelHeading = racer.mState.mHeading;
+            racer.mState.mSpeed = std::strtod(fields[5].c_str(), nullptr);
+            racer.mState.mHeight = std::strtod(fields[6].c_str(), nullptr);
+            racer.mState.mBoosting = std::atoi(fields[7].c_str()) != 0;
+            racer.mState.mSpinOutSeconds = std::strtod(fields[8].c_str(), nullptr);
+            const int craftClass = std::atoi(fields[9].c_str());
+            if (craftClass < static_cast<int>(CraftClass::Balanced)
+                || craftClass > static_cast<int>(CraftClass::Control))
+            {
+                return false;
+            }
+            racer.mCraftClass = static_cast<CraftClass>(craftClass);
+            racer.mState.mPreviousX = racer.mState.mX;
+            racer.mState.mPreviousY = racer.mState.mY;
+            racer.mState.mHasPreviousPosition = true;
+            if (racer.mPlayerId <= 0)
+                return false;
+            for (const OnlineRacerView& previous : gOnlineRacers)
+            {
+                if (previous.mPlayerId == racer.mPlayerId)
+                {
+                    racer.mPreviousState = previous.mState;
+                    racer.mHasPreviousSnapshot = true;
+                    break;
+                }
+            }
+            if (racer.mPlayerId == gLobbyPlayerId)
+            {
+                if (gOnlineHasBoostSnapshot)
+                {
+                    if (racer.mState.mBoosting && !gOnlineBoostActive)
+                        gOnlineBoostCue = true;
+                    if (racer.mState.mSpinOutSeconds > 0.0 && !gOnlineSpinOutActive)
+                        gOnlineImpactCue = true;
+                }
+                gOnlineHasBoostSnapshot = true;
+                gOnlineBoostActive = racer.mState.mBoosting;
+                gOnlineSpinOutActive = racer.mState.mSpinOutSeconds > 0.0;
+            }
+            racers.push_back(racer);
+        }
+        else if (fields.size() == 7 && fields[0] == "M")
+        {
+            OnlineMissileView missile;
+            missile.mPlayerId = std::atoi(fields[1].c_str());
+            missile.mState.mX = std::strtod(fields[2].c_str(), nullptr);
+            missile.mState.mY = std::strtod(fields[3].c_str(), nullptr);
+            missile.mState.mHeading = std::strtod(fields[4].c_str(), nullptr);
+            missile.mState.mTravelHeading = missile.mState.mHeading;
+            missile.mState.mSpeed = std::strtod(fields[5].c_str(), nullptr);
+            missile.mState.mHeight = std::strtod(fields[6].c_str(), nullptr);
+            missiles.push_back(missile);
+        }
+        else if (fields.size() == 3 && fields[0] == "N")
+        {
+            const int mineIndex = std::atoi(fields[1].c_str());
+            const int triggered = std::atoi(fields[2].c_str());
+            if (mineIndex < 0 || (triggered != 0 && triggered != 1))
+                return false;
+            if (mineTriggered.size() <= static_cast<std::size_t>(mineIndex))
+                mineTriggered.resize(static_cast<std::size_t>(mineIndex) + 1, false);
+            mineTriggered[mineIndex] = triggered != 0;
+        }
+        else
             return false;
-        OnlineRacerView racer;
-        racer.mPlayerId = std::atoi(fields[0].c_str());
-        racer.mState.mX = std::strtod(fields[1].c_str(), nullptr);
-        racer.mState.mY = std::strtod(fields[2].c_str(), nullptr);
-        racer.mState.mHeading = std::strtod(fields[3].c_str(), nullptr);
-        racer.mState.mTravelHeading = racer.mState.mHeading;
-        racer.mState.mSpeed = std::strtod(fields[4].c_str(), nullptr);
-        racer.mState.mHeight = std::strtod(fields[5].c_str(), nullptr);
-        racer.mState.mPreviousX = racer.mState.mX;
-        racer.mState.mPreviousY = racer.mState.mY;
-        racer.mState.mHasPreviousPosition = true;
-        if (racer.mPlayerId <= 0)
-            return false;
-        racers.push_back(racer);
     }
     gOnlineRaceRoomId = roomId;
     gOnlineRaceTick = static_cast<unsigned int>(tick);
     gOnlineRacers.swap(racers);
+    gOnlineMissiles.swap(missiles);
+    gOnlineMineTriggered.swap(mineTriggered);
+    gOnlineRaceSnapshotTicks = SDL_GetTicks();
     return true;
+}
+
+double InterpolateOnlineHeading(double pFrom, double pTo, double pFraction)
+{
+    double delta = pTo - pFrom;
+    while (delta > kPi)
+        delta -= 2.0 * kPi;
+    while (delta < -kPi)
+        delta += 2.0 * kPi;
+    return pFrom + delta * pFraction;
+}
+
+HovercraftState InterpolatedOnlineState(const OnlineRacerView& pRacer)
+{
+    if (!pRacer.mHasPreviousSnapshot)
+        return pRacer.mState;
+    const double fraction = std::min(1.0, (SDL_GetTicks() - gOnlineRaceSnapshotTicks) / 34.0);
+    HovercraftState state = pRacer.mPreviousState;
+    state.mX += (pRacer.mState.mX - state.mX) * fraction;
+    state.mY += (pRacer.mState.mY - state.mY) * fraction;
+    state.mHeight += (pRacer.mState.mHeight - state.mHeight) * fraction;
+    state.mSpeed += (pRacer.mState.mSpeed - state.mSpeed) * fraction;
+    state.mHeading = InterpolateOnlineHeading(state.mHeading, pRacer.mState.mHeading, fraction);
+    state.mTravelHeading = state.mHeading;
+    state.mBoosting = pRacer.mState.mBoosting;
+    state.mSpinOutSeconds = pRacer.mState.mSpinOutSeconds;
+    return state;
 }
 
 bool ParseRaceHudSnapshot(const std::string& pMessage)
@@ -214,6 +330,13 @@ bool ParseRaceHudSnapshot(const std::string& pMessage)
     for (std::size_t index = 2; index < entries.size(); ++index)
     {
         const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
+        if (fields.size() == 4 && fields[0] == "S")
+        {
+            gOnlineStartLights = std::atoi(fields[1].c_str());
+            gOnlineCountdownActive = std::atoi(fields[2].c_str()) != 0;
+            gOnlineCountdownSeconds = std::atoi(fields[3].c_str());
+            continue;
+        }
         if (fields.size() != 9)
             return false;
         const int playerId = std::atoi(fields[0].c_str());
@@ -231,6 +354,14 @@ bool ParseRaceHudSnapshot(const std::string& pMessage)
             racer.mLapTiming.mBestSeconds = std::strtod(fields[8].c_str(), nullptr);
             if (playerId == gLobbyPlayerId)
             {
+                if (gOnlineLastCheckpoint >= 0
+                    && (gOnlineLastCheckpoint != racer.mProgress.mNextCheckpoint
+                        || gOnlineLastCompletedLaps != racer.mProgress.mCompletedLaps))
+                {
+                    gOnlineCheckpointCue = true;
+                }
+                gOnlineLastCheckpoint = racer.mProgress.mNextCheckpoint;
+                gOnlineLastCompletedLaps = racer.mProgress.mCompletedLaps;
                 gOnlineHudElapsedSeconds = racer.mProgress.mElapsedSeconds;
                 gOnlineHudSnapshotTicks = SDL_GetTicks();
             }
@@ -1143,10 +1274,44 @@ void DrawCheckpointGates(const std::vector<RaceGate>& pWaypoints,
     }
 }
 
-void DrawBoostPad(const BoostPad& pPad)
+double BoostPadHeading(const BoostPad& pPad, const std::vector<RaceGate>& pWaypoints)
 {
-    const double innerRadius = pPad.mRadius * 0.55;
-    glColor3f(0.08f, 0.82f, 1.0f);
+    double closestDistanceSquared = -1.0;
+    double heading = 0.0;
+    for (std::size_t index = 0; index < pWaypoints.size(); ++index)
+    {
+        const RaceGate& start = pWaypoints[index];
+        const RaceGate& end = pWaypoints[(index + 1) % pWaypoints.size()];
+        const double directionX = end.mX - start.mX;
+        const double directionY = end.mY - start.mY;
+        const double lengthSquared = directionX * directionX + directionY * directionY;
+        if (lengthSquared <= 0.0)
+            continue;
+        double progress = ((pPad.mX - start.mX) * directionX + (pPad.mY - start.mY) * directionY)
+            / lengthSquared;
+        progress = std::fmax(0.0, std::fmin(1.0, progress));
+        const double pointX = start.mX + directionX * progress;
+        const double pointY = start.mY + directionY * progress;
+        const double deltaX = pPad.mX - pointX;
+        const double deltaY = pPad.mY - pointY;
+        const double distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        if (closestDistanceSquared < 0.0 || distanceSquared < closestDistanceSquared)
+        {
+            closestDistanceSquared = distanceSquared;
+            heading = std::atan2(directionY, directionX);
+        }
+    }
+    return heading;
+}
+
+void DrawBoostPad(const BoostPad& pPad, const std::vector<RaceGate>& pWaypoints)
+{
+    const double heading = BoostPadHeading(pPad, pWaypoints);
+    const double forwardX = std::cos(heading);
+    const double forwardY = std::sin(heading);
+    const double sideX = -forwardY;
+    const double sideY = forwardX;
+    glColor3f(0.02f, 0.18f, 0.28f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
     glVertex3d(pPad.mX - pPad.mRadius, 0.38, pPad.mY - pPad.mRadius);
@@ -1154,13 +1319,23 @@ void DrawBoostPad(const BoostPad& pPad)
     glVertex3d(pPad.mX + pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
     glVertex3d(pPad.mX - pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
     glEnd();
-    glColor3f(0.8f, 0.98f, 1.0f);
-    glBegin(GL_QUADS);
-    glVertex3d(pPad.mX - innerRadius, 0.4, pPad.mY - innerRadius);
-    glVertex3d(pPad.mX + innerRadius, 0.4, pPad.mY - innerRadius);
-    glVertex3d(pPad.mX + innerRadius, 0.4, pPad.mY + innerRadius);
-    glVertex3d(pPad.mX - innerRadius, 0.4, pPad.mY + innerRadius);
-    glEnd();
+    glDisable(GL_LIGHTING);
+    glColor3f(0.2f, 0.95f, 1.0f);
+    for (int arrowIndex = -1; arrowIndex <= 1; ++arrowIndex)
+    {
+        const double center = arrowIndex * pPad.mRadius * 0.52;
+        const double tail = center - pPad.mRadius * 0.28;
+        const double tip = center + pPad.mRadius * 0.34;
+        const double halfWidth = pPad.mRadius * 0.26;
+        glBegin(GL_TRIANGLES);
+        glVertex3d(pPad.mX + forwardX * tip, 0.405, pPad.mY + forwardY * tip);
+        glVertex3d(pPad.mX + forwardX * tail + sideX * halfWidth, 0.405,
+                   pPad.mY + forwardY * tail + sideY * halfWidth);
+        glVertex3d(pPad.mX + forwardX * tail - sideX * halfWidth, 0.405,
+                   pPad.mY + forwardY * tail - sideY * halfWidth);
+        glEnd();
+    }
+    glEnable(GL_LIGHTING);
 }
 
 void DrawMine(const Mine& pMine)
@@ -1410,9 +1585,15 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     glRotated(-pState.mHeading * 180.0 / kPi + (pState.mReverseFacing ? 180.0 : 0.0),
               0.0, 1.0, 0.0);
     glRotated(-std::sin(pState.mHeading - pState.mTravelHeading) * 14.0, 1.0, 0.0, 0.0);
-    const double lengthScale = pRival || pGhost ? craftScale : craftScale * 0.94;
-    const double heightScale = pRival || pGhost ? craftScale : craftScale * 1.28;
-    const double widthScale = pRival || pGhost ? craftScale : craftScale * 1.08;
+    const double classLengthScale = pCraftClass == CraftClass::Sprint ? 1.2
+        : (pCraftClass == CraftClass::Control ? 0.86 : 1.0);
+    const double classHeightScale = pCraftClass == CraftClass::Sprint ? 0.84
+        : (pCraftClass == CraftClass::Control ? 1.14 : 1.0);
+    const double classWidthScale = pCraftClass == CraftClass::Sprint ? 0.78
+        : (pCraftClass == CraftClass::Control ? 1.3 : 1.0);
+    const double lengthScale = (pRival || pGhost ? craftScale : craftScale * 0.94) * classLengthScale;
+    const double heightScale = (pRival || pGhost ? craftScale : craftScale * 1.28) * classHeightScale;
+    const double widthScale = (pRival || pGhost ? craftScale : craftScale * 1.08) * classWidthScale;
     glScaled(lengthScale, heightScale, widthScale);
     const double verticalPitch = pState.mVerticalSpeed >= 0.0
         ? std::fmin(13.0, pState.mVerticalSpeed * 1.7)
@@ -1953,11 +2134,9 @@ void DrawMenuHovercraft(int pCenterX, int pCenterY)
     glEnd();
 }
 
-void DrawMissile(const Missile& pMissile)
+void DrawMissile(const HovercraftState& pState)
 {
-    if (!pMissile.Active())
-        return;
-    const HovercraftState& state = pMissile.State();
+    const HovercraftState& state = pState;
     glPushMatrix();
     glTranslated(state.mX, state.mHeight, state.mY);
     glRotated(-state.mTravelHeading * 180.0 / kPi, 0.0, 1.0, 0.0);
@@ -2035,6 +2214,12 @@ void DrawMissile(const Missile& pMissile)
     glPopMatrix();
 }
 
+void DrawMissile(const Missile& pMissile)
+{
+    if (pMissile.Active())
+        DrawMissile(pMissile.State());
+}
+
 void DrawLobbyPanel(int pLeft, int pTop, int pWidth, int pHeight)
 {
     glColor3f(0.105f, 0.105f, 0.13f);
@@ -2064,6 +2249,65 @@ void DrawLobbyButton(const char* pLabel, int pLeft, int pTop, int pWidth, bool p
     glEnd();
     glColor3f(0.92f, 0.88f, 0.92f);
     DrawPixelText(pLabel, pLeft + 18, pTop + 13, 2);
+}
+
+void DrawTrackMinimap(int pTrackIndex, int pLeft, int pTop, int pSize)
+{
+    const std::vector<TrackDefinition>& tracks = BuiltInTracks();
+    if (pTrackIndex < 0 || pTrackIndex >= static_cast<int>(tracks.size())
+        || tracks[pTrackIndex].mWaypoints.size() < 2)
+    {
+        return;
+    }
+
+    const std::vector<RaceGate>& waypoints = tracks[pTrackIndex].mWaypoints;
+    double minimumX = waypoints.front().mX;
+    double maximumX = minimumX;
+    double minimumY = waypoints.front().mY;
+    double maximumY = minimumY;
+    for (const RaceGate& waypoint : waypoints)
+    {
+        minimumX = std::min(minimumX, waypoint.mX);
+        maximumX = std::max(maximumX, waypoint.mX);
+        minimumY = std::min(minimumY, waypoint.mY);
+        maximumY = std::max(maximumY, waypoint.mY);
+    }
+    const double span = std::max(1.0, std::max(maximumX - minimumX, maximumY - minimumY));
+    const double scale = (pSize - 28.0) / span;
+    const double offsetX = pLeft + (pSize - (maximumX - minimumX) * scale) * 0.5;
+    const double offsetY = pTop + (pSize - (maximumY - minimumY) * scale) * 0.5;
+    const auto mapX = [minimumX, offsetX, scale](double pX)
+    {
+        return static_cast<int>(offsetX + (pX - minimumX) * scale);
+    };
+    const auto mapY = [minimumY, offsetY, scale](double pY)
+    {
+        return static_cast<int>(offsetY + (pY - minimumY) * scale);
+    };
+
+    glLineWidth(6.0f);
+    glColor3f(0.16f, 0.48f, 0.56f);
+    glBegin(GL_LINE_LOOP);
+    for (const RaceGate& waypoint : waypoints)
+        glVertex2i(mapX(waypoint.mX), mapY(waypoint.mY));
+    glEnd();
+    glLineWidth(2.0f);
+    glColor3f(0.7f, 0.94f, 0.96f);
+    glBegin(GL_LINE_LOOP);
+    for (const RaceGate& waypoint : waypoints)
+        glVertex2i(mapX(waypoint.mX), mapY(waypoint.mY));
+    glEnd();
+    glLineWidth(1.0f);
+
+    const int startX = mapX(waypoints.front().mX);
+    const int startY = mapY(waypoints.front().mY);
+    glColor3f(1.0f, 0.78f, 0.12f);
+    glBegin(GL_QUADS);
+    glVertex2i(startX - 4, startY - 4);
+    glVertex2i(startX + 4, startY - 4);
+    glVertex2i(startX + 4, startY + 4);
+    glVertex2i(startX - 4, startY + 4);
+    glEnd();
 }
 
 void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSetting,
@@ -2244,13 +2488,13 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glVertex2i(previewLeft + previewSize, previewTop + previewSize);
         glVertex2i(previewLeft, previewTop + previewSize);
         glEnd();
-        DrawPixelText("PREVIEW UNAVAILABLE", previewLeft + 10, previewTop + previewSize / 2, 2);
         glColor3f(0.66f, 0.66f, 0.73f);
         if (gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
         {
             const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
             const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
             const int validTrackIndex = room.mTrackIndex >= 0 && room.mTrackIndex < 3 ? room.mTrackIndex : 0;
+            DrawTrackMinimap(validTrackIndex, previewLeft, previewTop, previewSize);
             const std::string players = std::to_string(room.mPlayerCount) + " OF "
                 + std::to_string(room.mPlayerCapacity) + " PLAYERS";
             DrawPixelText(room.mName.c_str(), previewLeft + previewSize + 16, previewTop + 4, 2);
@@ -2278,7 +2522,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             && gLobbyRooms[gLobbySelectedRoom].mId == gLobbyJoinedRoomId;
         DrawLobbyButton(selectedRoomIsHosted ? "START RACE" : selectedRoomIsJoined ? "LEAVE ROOM" : "JOIN GAME",
                         actionLeft + 16, top + 16, actionWidth - 32, true);
-        DrawLobbyButton("HOST RACE", actionLeft + 16, top + 72, actionWidth - 32, false);
+        if (!selectedRoomIsHosted)
+            DrawLobbyButton("HOST RACE", actionLeft + 16, top + 72, actionWidth - 32, false);
         glColor3f(0.22f, 0.22f, 0.27f);
         glBegin(GL_LINES);
         glVertex2i(actionLeft + 16, top + 132);
@@ -2856,7 +3101,7 @@ void DrawOnlineHudPanel(int pLeft, int pTop, int pWidth, int pHeight)
 }
 
 void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetLaps,
-                   int pWidth, int pHeight)
+                   bool pWrongWay, int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
     glDisable(GL_FOG);
@@ -2898,7 +3143,7 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
                   bestLapSeconds / 60, bestLapSeconds % 60);
     std::snprintf(positionLabel, sizeof(positionLabel), "PLACE %d OF %d",
                   pPlayer.mPosition, pRacerCount);
-    DrawOnlineHudPanel(18, 18, 170, 72);
+    DrawOnlineHudPanel(18, 18, 170, gOnlineChampionshipEventCount > 0 ? 92 : 72);
     DrawOnlineHudPanel(pWidth - 180, 18, 162, 42);
     DrawOnlineHudPanel(18, pHeight - 88, 170, 70);
     DrawOnlineHudPanel(pWidth - 180, pHeight - 70, 162, 52);
@@ -2907,12 +3152,144 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText(lapLabel, 30, 50, 2);
     DrawPixelText(timeLabel, 30, 70, 2);
+    if (gOnlineChampionshipEventCount > 0)
+    {
+        char championshipLabel[32];
+        std::snprintf(championshipLabel, sizeof(championshipLabel), "CUP %d OF %d  %d PTS",
+                      gOnlineChampionshipEvent, gOnlineChampionshipEventCount,
+                      gOnlineChampionshipPoints);
+        DrawPixelText(championshipLabel, 30, 90, 2);
+    }
     DrawPixelText("SPEED", 30, pHeight - 78, 2);
     DrawPixelText(speedLabel, 30, pHeight - 56, 4);
     DrawPixelText(currentLapLabel, pWidth - 168, pHeight - 58, 2);
     DrawPixelText(bestLapLabel, pWidth - 168, pHeight - 36, 2);
+    if (gOnlineCountdownActive)
+    {
+        const int lensRadius = std::max(14, std::min(30, pWidth / 16));
+        const int signalWidth = lensRadius * 8 + 28;
+        const int signalHeight = lensRadius * 2 + 24;
+        const int signalLeft = pWidth / 2 - signalWidth / 2;
+        const int signalTop = std::max(12, pHeight / 2 - signalHeight - 52);
+        const int lensY = signalTop + signalHeight / 2;
+        const char* countdownText = "START IN 6";
+        char countdownBuffer[20];
+        std::snprintf(countdownBuffer, sizeof(countdownBuffer), "START IN %d",
+                      std::max(0, gOnlineCountdownSeconds));
+        countdownText = countdownBuffer;
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(0.01f, 0.015f, 0.02f, 0.9f);
+        glBegin(GL_QUADS);
+        glVertex2i(signalLeft, signalTop);
+        glVertex2i(signalLeft + signalWidth, signalTop);
+        glVertex2i(signalLeft + signalWidth, signalTop + signalHeight);
+        glVertex2i(signalLeft, signalTop + signalHeight);
+        glEnd();
+        glColor4f(0.52f, 0.62f, 0.65f, 0.9f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(signalLeft, signalTop);
+        glVertex2i(signalLeft + signalWidth, signalTop);
+        glVertex2i(signalLeft + signalWidth, signalTop + signalHeight);
+        glVertex2i(signalLeft, signalTop + signalHeight);
+        glEnd();
+        glDisable(GL_BLEND);
+
+        for (int light = 0; light < 3; ++light)
+        {
+            const bool lit = light < gOnlineStartLights;
+            const int lensX = signalLeft + lensRadius * 2 + 14 + light * lensRadius * 2;
+            const float red = light == 0 ? 1.0f : (light == 1 ? 1.0f : 0.18f);
+            const float green = light == 0 ? 0.12f : (light == 1 ? 0.64f : 1.0f);
+            const float blue = light == 0 ? 0.1f : (light == 1 ? 0.08f : 0.15f);
+            glColor3f(lit ? red : red * 0.18f,
+                      lit ? green : green * 0.18f,
+                      lit ? blue : blue * 0.18f);
+            glBegin(GL_POLYGON);
+            for (int segment = 0; segment < 24; ++segment)
+            {
+                const double angle = segment * 2.0 * kPi / 24.0;
+                glVertex2i(lensX + static_cast<int>(std::cos(angle) * lensRadius),
+                           lensY + static_cast<int>(std::sin(angle) * lensRadius));
+            }
+            glEnd();
+            glColor3f(0.7f, 0.76f, 0.76f);
+            glBegin(GL_LINE_LOOP);
+            for (int segment = 0; segment < 24; ++segment)
+            {
+                const double angle = segment * 2.0 * kPi / 24.0;
+                glVertex2i(lensX + static_cast<int>(std::cos(angle) * lensRadius),
+                           lensY + static_cast<int>(std::sin(angle) * lensRadius));
+            }
+            glEnd();
+        }
+        glColor3f(1.0f, 0.78f, 0.12f);
+        DrawPixelText(countdownText, pWidth / 2 - PixelTextWidth(countdownText, 4) / 2,
+                      signalTop + signalHeight + 16, 4);
+        char craftLabel[32];
+        std::snprintf(craftLabel, sizeof(craftLabel), "CRAFT %s", CraftClassName(pPlayer.mCraftClass));
+        glColor3f(0.82f, 0.9f, 0.92f);
+        DrawPixelText(craftLabel, pWidth / 2 - PixelTextWidth(craftLabel, 2) / 2,
+                      signalTop + signalHeight + 48, 2);
+        glColor3f(0.2f, 0.9f, 1.0f);
+        DrawPixelText("LEFT RIGHT CHANGE CRAFT",
+                      pWidth / 2 - PixelTextWidth("LEFT RIGHT CHANGE CRAFT", 2) / 2,
+                      signalTop + signalHeight + 68, 2);
+    }
+    if (gOnlineRaceFinished)
+    {
+        DrawOnlineHudPanel(pWidth / 2 - 132, pHeight / 2 - 34, 264, 68);
+        glColor3f(1.0f, 0.78f, 0.12f);
+        DrawPixelText("RACE COMPLETE", pWidth / 2 - 78, pHeight / 2 - 20, 3);
+        glColor3f(0.82f, 0.9f, 0.92f);
+        DrawPixelText("ENTER FOR LOBBY", pWidth / 2 - 74, pHeight / 2 + 12, 2);
+    }
     glColor3f(1.0f, 0.78f, 0.12f);
     DrawPixelText(positionLabel, pWidth - 168, 32, 2);
+    if (pWrongWay)
+    {
+        glColor3f(1.0f, 0.2f, 0.12f);
+        DrawPixelText("WRONG WAY", pWidth / 2 - 54, 26, 3);
+    }
+
+    const int leaderboardCount = std::min(8, static_cast<int>(gOnlineRacers.size()));
+    if (leaderboardCount > 0)
+    {
+        const int leaderboardTop = 72;
+        DrawOnlineHudPanel(pWidth - 180, leaderboardTop, 162, 22 + leaderboardCount * 17);
+        glColor3f(0.2f, 0.9f, 1.0f);
+        DrawPixelText("LEADERS", pWidth - 168, leaderboardTop + 7, 2);
+        for (int place = 1; place <= leaderboardCount; ++place)
+        {
+            const OnlineRacerView* racer = nullptr;
+            for (const OnlineRacerView& candidate : gOnlineRacers)
+            {
+                if (candidate.mPosition == place)
+                {
+                    racer = &candidate;
+                    break;
+                }
+            }
+            if (racer == nullptr)
+                continue;
+            std::string name = racer->mPlayerId >= 1000000 ? "RIVAL" : "PILOT";
+            for (const LobbyPlayerView& player : gLobbyPlayers)
+            {
+                if (player.mId == racer->mPlayerId)
+                {
+                    name = player.mDisplayName;
+                    break;
+                }
+            }
+            char entry[32];
+            std::snprintf(entry, sizeof(entry), "%d %s", place, name.c_str());
+            glColor3f(racer->mPlayerId == gLobbyPlayerId ? 1.0f : 0.82f,
+                      racer->mPlayerId == gLobbyPlayerId ? 0.78f : 0.9f,
+                      racer->mPlayerId == gLobbyPlayerId ? 0.12f : 0.92f);
+            DrawPixelText(entry, pWidth - 168, leaderboardTop + 26 + (place - 1) * 17, 2);
+        }
+    }
 
     glPopMatrix();
     glMatrixMode(GL_PROJECTION);
@@ -3330,6 +3707,17 @@ int main(int pArgumentCount, char* pArguments[])
         gOnlineRacers.clear();
         gOnlineHudElapsedSeconds = 0.0;
         gOnlineHudSnapshotTicks = 0;
+        gOnlineHasBoostSnapshot = false;
+        gOnlineBoostActive = false;
+        gOnlineSpinOutActive = false;
+        gOnlineBoostCue = false;
+        gOnlineImpactCue = false;
+        gOnlineStartLights = 0;
+        gOnlineCountdownActive = false;
+        gOnlineCountdownSeconds = 0;
+        gOnlineChampionshipEvent = 0;
+        gOnlineChampionshipEventCount = 0;
+        gOnlineChampionshipPoints = 0;
     };
     const auto connectLobby = [&]()
     {
@@ -3412,10 +3800,29 @@ int main(int pArgumentCount, char* pArguments[])
             }
             else if (message.compare(0, 5, "RACE ") == 0 && ParseRaceSnapshot(message))
             {
+                if (gOnlineBoostCue)
+                {
+                    audioFeedback.PlayBoost();
+                    gOnlineBoostCue = false;
+                }
+                if (gOnlineImpactCue)
+                {
+                    audioFeedback.PlayImpact();
+                    gOnlineImpactCue = false;
+                }
                 if (frontScreen != FrontScreen::OnlineRace)
                 {
                     gOnlineHudElapsedSeconds = 0.0;
                     gOnlineHudSnapshotTicks = 0;
+                    gOnlineLastCheckpoint = -1;
+                    gOnlineLastCompletedLaps = -1;
+                    gOnlineCheckpointCue = false;
+                    gOnlineHasBoostSnapshot = false;
+                    gOnlineBoostActive = false;
+                    gOnlineSpinOutActive = false;
+                    gOnlineBoostCue = false;
+                    gOnlineImpactCue = false;
+                    gOnlineRaceFinished = false;
                     for (const LobbyRoomView& room : gLobbyRooms)
                     {
                         if (room.mId == gOnlineRaceRoomId
@@ -3436,21 +3843,59 @@ int main(int pArgumentCount, char* pArguments[])
                 }
             }
             else if (message.compare(0, 8, "RACEHUD ") == 0)
-                ParseRaceHudSnapshot(message);
+            {
+                if (ParseRaceHudSnapshot(message) && gOnlineCheckpointCue)
+                {
+                    audioFeedback.PlayCheckpoint();
+                    gOnlineCheckpointCue = false;
+                }
+            }
+            else if (message.compare(0, 10, "RACEEVENT ") == 0)
+            {
+                const std::vector<std::string> fields = SplitLobbyField(message.substr(10), '|');
+                const int eventRoomId = fields.empty() ? 0 : std::atoi(fields[0].c_str());
+                if (fields.size() >= 4 && eventRoomId > 0
+                    && (gOnlineRaceRoomId == 0 || eventRoomId == gOnlineRaceRoomId))
+                {
+                    const int eventTrack = std::atoi(fields[1].c_str());
+                    gOnlineRaceRoomId = eventRoomId;
+                    gOnlineChampionshipEvent = std::atoi(fields[2].c_str());
+                    gOnlineChampionshipEventCount = std::atoi(fields[3].c_str());
+                    gOnlineChampionshipPoints = 0;
+                    for (std::size_t fieldIndex = 4; fieldIndex < fields.size(); ++fieldIndex)
+                    {
+                        const std::vector<std::string> points = SplitLobbyField(fields[fieldIndex], ',');
+                        if (points.size() == 3 && points[0] == "P"
+                            && std::atoi(points[1].c_str()) == gLobbyPlayerId)
+                        {
+                            gOnlineChampionshipPoints = std::atoi(points[2].c_str());
+                            break;
+                        }
+                    }
+                    if (eventTrack >= 0 && eventTrack < static_cast<int>(builtInTracks.size()))
+                    {
+                        trackIndex = eventTrack;
+                        loadTrack(false);
+                        gOnlineRacers.clear();
+                        gOnlineMissiles.clear();
+                        gOnlineMineTriggered.clear();
+                        gOnlineHudElapsedSeconds = 0.0;
+                        gOnlineHudSnapshotTicks = 0;
+                        gOnlineLastCheckpoint = -1;
+                        gOnlineLastCompletedLaps = -1;
+                        gOnlineCheckpointCue = false;
+                        gOnlineHasBoostSnapshot = false;
+                        gOnlineBoostActive = false;
+                        gOnlineSpinOutActive = false;
+                        gOnlineBoostCue = false;
+                        gOnlineImpactCue = false;
+                    }
+                }
+            }
             else if (message.compare(0, 11, "RACEFINISH ") == 0
                      && std::atoi(message.substr(11).c_str()) == gOnlineRaceRoomId)
             {
-                gOnlineRaceRoomId = 0;
-                gOnlineRaceTick = 0;
-                gOnlineTargetLaps = 0;
-                gOnlineRacers.clear();
-                gOnlineHudElapsedSeconds = 0.0;
-                gOnlineHudSnapshotTicks = 0;
-                gOnlineChatInput.clear();
-                gOnlineChatInputFocused = false;
-                SDL_StartTextInput();
-                gLobbyChatInputFocused = true;
-                frontScreen = FrontScreen::Multiplayer;
+                gOnlineRaceFinished = true;
                 gLobbyStatus = "RACE COMPLETE";
             }
             else if (message.compare(0, 6, "ERROR ") == 0)
@@ -3559,7 +4004,10 @@ int main(int pArgumentCount, char* pArguments[])
                             gLobbyStatus = "JOINING RACE";
                         }
                     }
-                    else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42))
+                    else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42)
+                            && !(gLobbySelectedRoom >= 0
+                                && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
+                                && gLobbyRooms[gLobbySelectedRoom].mHostId == gLobbyPlayerId))
                     {
                         gLobbyChatInputFocused = false;
                         gHostSetupSelection = 0;
@@ -3601,7 +4049,8 @@ int main(int pArgumentCount, char* pArguments[])
                         gHostSetupSelection = option;
                         if (option == 6)
                         {
-                            const std::string command = "CREATE OPEN RACE|" + std::to_string(gHostRaceMode)
+                            const std::string command = "CREATE " + builtInTracks[gHostTrackIndex].mName + "|"
+                                + std::to_string(gHostRaceMode)
                                 + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
                                 + "|" + std::to_string(gHostPlayerCapacity) + "|"
                                 + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0");
@@ -3740,6 +4189,11 @@ int main(int pArgumentCount, char* pArguments[])
                             gOnlineRaceTick = 0;
                             gOnlineTargetLaps = 0;
                             gOnlineRacers.clear();
+                            gOnlineHasBoostSnapshot = false;
+                            gOnlineBoostActive = false;
+                            gOnlineSpinOutActive = false;
+                            gOnlineBoostCue = false;
+                            gOnlineImpactCue = false;
                             gOnlineChatMessages.clear();
                             gOnlineChatInput.clear();
                             gOnlineChatInputFocused = false;
@@ -3775,7 +4229,34 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::OnlineRace)
                 {
-                    if (gOnlineChatInputFocused && event.key.keysym.sym == SDLK_BACKSPACE
+                    if (gOnlineRaceFinished
+                        && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
+                    {
+                        gOnlineRaceRoomId = 0;
+                        gOnlineRaceTick = 0;
+                        gOnlineTargetLaps = 0;
+                        gOnlineRacers.clear();
+                        gOnlineRaceFinished = false;
+                        gOnlineChatInput.clear();
+                        gOnlineChatInputFocused = false;
+                        SDL_StartTextInput();
+                        gLobbyChatInputFocused = true;
+                        frontScreen = FrontScreen::Multiplayer;
+                    }
+                    else if (event.key.keysym.sym == SDLK_F2)
+                        gOnlineRecoveryRequested = true;
+                    else if (event.key.keysym.sym == SDLK_F3)
+                        steeringAssistEnabled = !steeringAssistEnabled;
+                    else if (event.key.keysym.sym == SDLK_F4)
+                        brakingAssistEnabled = !brakingAssistEnabled;
+                    else if (gOnlineCountdownActive && !gOnlineRaceFinished
+                             && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
+                    {
+                        const int changes = event.key.keysym.sym == SDLK_LEFT ? 2 : 1;
+                        for (int change = 0; change < changes; ++change)
+                            playerCraftClass = NextCraftClass(playerCraftClass);
+                    }
+                    else if (gOnlineChatInputFocused && event.key.keysym.sym == SDLK_BACKSPACE
                         && !gOnlineChatInput.empty())
                         gOnlineChatInput.erase(gOnlineChatInput.size() - 1);
                     else if (gOnlineChatInputFocused
@@ -4020,15 +4501,21 @@ int main(int pArgumentCount, char* pArguments[])
             input.mJump = input.mJump || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B);
             input.mFire = input.mFire || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X);
         }
-        if (frontScreen == FrontScreen::OnlineRace)
+        if (frontScreen == FrontScreen::OnlineRace && !gOnlineRaceFinished)
         {
             onlineInputSeconds += std::fmin(frameSeconds, 0.1);
             if (onlineInputSeconds >= 1.0 / 30.0)
             {
                 std::ostringstream command;
                 command << "INPUT " << input.mThrottle << '|' << input.mSteering << '|'
-                        << (input.mJump ? 1 : 0) << '|' << (input.mReverseFacing ? 1 : 0);
+                    << (input.mJump ? 1 : 0) << '|' << (input.mReverseFacing ? 1 : 0)
+                    << '|' << (input.mFire ? 1 : 0) << '|'
+                        << (gOnlineRecoveryRequested ? 1 : 0) << '|'
+                        << (steeringAssistEnabled ? 1 : 0) << '|'
+                        << (brakingAssistEnabled ? 1 : 0) << '|'
+                        << static_cast<int>(playerCraftClass);
                 lobbyClient.SendCommand(command.str());
+                gOnlineRecoveryRequested = false;
                 onlineInputSeconds = 0.0;
             }
         }
@@ -4060,6 +4547,7 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         replayGhost.Step(ghostInput, seconds);
                         BounceOffCourseWall(replayGhost, course);
+                        ApplyBoostPads(replayGhost, boostPads);
                         ApplyRaisedSections(replayGhost, raisedSections);
                         ApplyMines(replayGhost, mines);
                         ++ghostFrame;
@@ -4105,6 +4593,7 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         Hovercraft& rival = rivals[rivalIndex];
                         BounceOffCourseWall(rival, course);
+                        ApplyBoostPads(rival, boostPads);
                         ApplyRaisedSections(rival, raisedSections);
                         ApplyMines(rival, mines);
                         ApplyHazardZones(rival, hazardZones, seconds);
@@ -4134,6 +4623,8 @@ int main(int pArgumentCount, char* pArguments[])
                     audioFeedback.PlayImpact();
                     impactSoundCooldown = 0.18;
                 }
+                if (ApplyBoostPads(hovercraft, boostPads))
+                    audioFeedback.PlayBoost();
                 ApplyRaisedSections(hovercraft, raisedSections);
                 if (ApplyMines(hovercraft, mines) && impactSoundCooldown <= 0.0)
                 {
@@ -4310,7 +4801,7 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 if (racer.mPlayerId == gLobbyPlayerId)
                 {
-                    cameraState = racer.mState;
+                    cameraState = InterpolatedOnlineState(racer);
                     break;
                 }
             }
@@ -4336,22 +4827,50 @@ int main(int pArgumentCount, char* pArguments[])
                        selectedTrack.mWallRed, selectedTrack.mWallGreen, selectedTrack.mWallBlue, roadTexture,
                        wallTexture);
             DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
-            DrawCheckpointGates(courseWaypoints, checkpoints, 0, selectedTrack.mRoadHalfWidth);
+            int onlineActiveCheckpoint = 0;
+            for (const OnlineRacerView& racer : gOnlineRacers)
+            {
+                if (racer.mPlayerId == gLobbyPlayerId)
+                {
+                    onlineActiveCheckpoint = racer.mProgress.mNextCheckpoint;
+                    break;
+                }
+            }
+            DrawCheckpointGates(courseWaypoints, checkpoints, onlineActiveCheckpoint,
+                                selectedTrack.mRoadHalfWidth);
+            for (const BoostPad& pad : boostPads)
+                DrawBoostPad(pad, courseWaypoints);
+            for (const HazardZone& zone : hazardZones)
+                DrawHazardZone(zone);
             for (const RaisedSection& section : raisedSections)
                 DrawRaisedSection(section);
+            for (std::size_t mineIndex = 0; mineIndex < mines.size(); ++mineIndex)
+            {
+                if (mineIndex >= gOnlineMineTriggered.size() || !gOnlineMineTriggered[mineIndex])
+                    DrawMine(mines[mineIndex]);
+            }
+            for (const OnlineMissileView& missile : gOnlineMissiles)
+                DrawMissile(missile.mState);
             const OnlineRacerView* localRacer = nullptr;
             for (std::size_t racerIndex = 0; racerIndex < gOnlineRacers.size(); ++racerIndex)
             {
                 const OnlineRacerView& racer = gOnlineRacers[racerIndex];
                 if (racer.mPlayerId == gLobbyPlayerId)
                     localRacer = &racer;
-                DrawHovercraft(racer.mState, racer.mPlayerId != gLobbyPlayerId, false,
-                               CraftClass::Balanced, static_cast<int>(racerIndex) + 1,
+                DrawHovercraft(InterpolatedOnlineState(racer), racer.mPlayerId != gLobbyPlayerId, false,
+                               racer.mCraftClass, static_cast<int>(racerIndex) + 1,
                                static_cast<int>(racerIndex));
             }
             if (localRacer != nullptr)
+            {
+                const RaceGate& onlineActiveGate = localRacer->mProgress.mNextCheckpoint
+                    < static_cast<int>(checkpoints.size())
+                    ? checkpoints[localRacer->mProgress.mNextCheckpoint] : selectedTrack.Finish();
+                const bool onlineWrongWay = !localRacer->mProgress.mFinished
+                    && IsHeadingAwayFromGate(localRacer->mState, onlineActiveGate);
                 DrawOnlineHud(*localRacer, static_cast<int>(gOnlineRacers.size()), gOnlineTargetLaps,
-                              drawableWidth, drawableHeight);
+                              onlineWrongWay, drawableWidth, drawableHeight);
+            }
             DrawOnlineChat(drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;
@@ -4380,6 +4899,8 @@ int main(int pArgumentCount, char* pArguments[])
         DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
         DrawCheckpointGates(courseWaypoints, checkpoints, race.Progress().mNextCheckpoint,
                     selectedTrack.mRoadHalfWidth);
+        for (const BoostPad& pad : boostPads)
+            DrawBoostPad(pad, courseWaypoints);
         for (const HazardZone& zone : hazardZones)
             DrawHazardZone(zone);
         for (const RaisedSection& section : raisedSections)

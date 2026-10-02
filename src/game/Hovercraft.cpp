@@ -36,6 +36,11 @@ void Hovercraft::Reset(const HovercraftState& pState)
         mState.mHeight = mTuning.mHoverHeight;
 }
 
+void Hovercraft::SetTuning(const HovercraftTuning& pTuning)
+{
+    mTuning = pTuning;
+}
+
 void ApplySpinOut(HovercraftState& pState, double pSeconds)
 {
     pState.mSpinOutSeconds = std::max(pState.mSpinOutSeconds, pSeconds);
@@ -69,12 +74,19 @@ void Hovercraft::Step(const HovercraftInput& pInput, double pSeconds)
     const double thrustTarget = throttle > 0.0 ? throttle : 0.0;
     const double thrustBlend = Clamp(pSeconds * 8.0, 0.0, 1.0);
     mState.mEngineThrust += (thrustTarget - mState.mEngineThrust) * thrustBlend;
-    mState.mBoosting = false;
+    const bool padBoosting = !spinningOut && mState.mPadBoostSeconds > 0.0;
+    mState.mBoosting = padBoosting;
 
     mState.mSpeed += acceleration * pSeconds;
+    if (padBoosting)
+    {
+        mState.mSpeed += mTuning.mBoostAcceleration * pSeconds;
+        mState.mPadBoostSeconds = std::max(0.0, mState.mPadBoostSeconds - pSeconds);
+    }
     mState.mBoostEnergy = 1.0;
     mState.mSpeed /= 1.0 + mTuning.mLinearDrag * pSeconds;
-    mState.mSpeed = Clamp(mState.mSpeed, -mTuning.mMaximumSpeed * 0.45, mTuning.mMaximumSpeed);
+    const double maximumSpeed = padBoosting ? mTuning.mBoostMaximumSpeed : mTuning.mMaximumSpeed;
+    mState.mSpeed = Clamp(mState.mSpeed, -mTuning.mMaximumSpeed * 0.45, maximumSpeed);
     if (spinningOut)
     {
         mState.mSpinOutSeconds = std::max(0.0, mState.mSpinOutSeconds - pSeconds);

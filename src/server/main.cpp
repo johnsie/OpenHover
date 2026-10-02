@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "AuthoritativeRace.h"
+#include "Championship.h"
 #include "Lobby.h"
+#include "TrackDefinition.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -124,10 +126,19 @@ void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
     message << "RACE " << pRoomId << '|' << snapshot.mTick;
     for (const RaceRacerSnapshot& racer : snapshot.mRacers)
     {
-        message << '|' << racer.mPlayerId << ',' << racer.mState.mX << ',' << racer.mState.mY
+        message << "|R," << racer.mPlayerId << ',' << racer.mState.mX << ',' << racer.mState.mY
                 << ',' << racer.mState.mHeading << ',' << racer.mState.mSpeed << ','
-                << racer.mState.mHeight;
+            << racer.mState.mHeight << ',' << (racer.mState.mBoosting ? 1 : 0) << ','
+            << racer.mState.mSpinOutSeconds << ',' << static_cast<int>(racer.mCraftClass);
     }
+    for (const RaceMissileSnapshot& missile : snapshot.mMissiles)
+    {
+        message << "|M," << missile.mPlayerId << ',' << missile.mState.mX << ','
+                << missile.mState.mY << ',' << missile.mState.mHeading << ','
+                << missile.mState.mSpeed << ',' << missile.mState.mHeight;
+    }
+    for (std::size_t index = 0; index < snapshot.mMineTriggered.size(); ++index)
+        message << "|N," << index << ',' << (snapshot.mMineTriggered[index] ? 1 : 0);
     for (const ClientConnection& client : pClients)
     {
         if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
@@ -140,7 +151,9 @@ void BroadcastRaceHudSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRac
 {
     const RaceSnapshot snapshot = pRace.Snapshot();
     std::ostringstream message;
-    message << "RACEHUD " << pRoomId << '|' << snapshot.mTargetLaps;
+    message << "RACEHUD " << pRoomId << '|' << snapshot.mTargetLaps << "|S,"
+            << snapshot.mStartLights << ',' << (snapshot.mCountdownActive ? 1 : 0) << ','
+            << snapshot.mCountdownSeconds;
     for (const RaceRacerSnapshot& racer : snapshot.mRacers)
     {
         message << '|' << racer.mPlayerId << ',' << racer.mProgress.mCompletedLaps << ','
@@ -167,15 +180,38 @@ void BroadcastRaceFinished(LobbyRoomId pRoomId, const Lobby& pLobby,
     }
 }
 
+void BroadcastRaceEvent(LobbyRoomId pRoomId, int pTrackIndex, const Championship& pChampionship,
+                        const AuthoritativeRace& pRace, const Lobby& pLobby,
+                        const std::vector<ClientConnection>& pClients)
+{
+    std::ostringstream message;
+    message << "RACEEVENT " << pRoomId << '|' << pTrackIndex << '|'
+            << pChampionship.CurrentEvent() + 1 << '|' << pChampionship.EventCount();
+    const RaceSnapshot snapshot = pRace.Snapshot();
+    for (int competitor = 0; competitor < pChampionship.CompetitorCount()
+         && competitor < static_cast<int>(snapshot.mRacers.size()); ++competitor)
+    {
+        message << "|P," << snapshot.mRacers[competitor].mPlayerId << ','
+                << pChampionship.CompetitorPoints(competitor);
+    }
+    for (const ClientConnection& client : pClients)
+    {
+        if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
+            SendLine(client, message.str());
+    }
+}
+
 void StopRace(Lobby& pLobby, std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
-              LobbyRoomId pRoomId)
+              std::map<LobbyRoomId, Championship>& pChampionships, LobbyRoomId pRoomId)
 {
     if (pRaces.erase(pRoomId) != 0)
         pLobby.FinishRace(pRoomId);
+    pChampionships.erase(pRoomId);
 }
 
 void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, Lobby& pLobby,
-                  std::map<LobbyRoomId, AuthoritativeRace>& pRaces)
+                  std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
+                  std::map<LobbyRoomId, Championship>& pChampionships)
 {
     if (pClients[pIndex].mPlayerId != 0)
     {
@@ -190,7 +226,7 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
         }
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClients[pIndex].mPlayerId);
         pLobby.Disconnect(pClients[pIndex].mPlayerId);
-        StopRace(pLobby, pRaces, roomId);
+        StopRace(pLobby, pRaces, pChampionships, roomId);
         close(pClients[pIndex].mSocket);
         pClients.erase(pClients.begin() + pIndex);
         if (!displayName.empty())
@@ -203,6 +239,7 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
 
 void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& pLobby,
                    std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
+                   std::map<LobbyRoomId, Championship>& pChampionships,
                    const std::vector<ClientConnection>& pClients)
 {
     const std::size_t separator = pLine.find(' ');
@@ -251,12 +288,18 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         LobbyRaceSettings settings;
         LobbyRoomId roomId = 0;
         std::string roomName;
+        const std::vector<TrackDefinition>& tracks = BuiltInTracks();
         if (ParseRoomFields(argument, roomName, settings)
-            && pLobby.CreateRoom(pClient.mPlayerId, roomName, settings, roomId))
+            && settings.mTrackIndex >= 0
+            && settings.mTrackIndex < static_cast<int>(tracks.size()))
         {
-            SendLine(pClient, "ROOM " + std::to_string(roomId));
-            BroadcastLobbySnapshot(pLobby, pClients);
-            return;
+            roomName = tracks[settings.mTrackIndex].mName;
+            if (pLobby.CreateRoom(pClient.mPlayerId, roomName, settings, roomId))
+            {
+                SendLine(pClient, "ROOM " + std::to_string(roomId));
+                BroadcastLobbySnapshot(pLobby, pClients);
+                return;
+            }
         }
     }
     else if (command == "JOIN")
@@ -293,7 +336,7 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
         if (argument.empty() && pLobby.LeaveRoom(pClient.mPlayerId))
         {
-            StopRace(pLobby, pRaces, roomId);
+            StopRace(pLobby, pRaces, pChampionships, roomId);
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
         }
@@ -315,10 +358,21 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             AuthoritativeRace race;
             if (requestedRoom != nullptr
                 && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex,
-                              requestedRoom->mSettings.mLapCount)
+                              requestedRoom->mSettings.mLapCount,
+                              requestedRoom->mSettings.mWeaponsAllowed,
+                              requestedRoom->mSettings.mRivalCount,
+                              requestedRoom->mSettings.mRaceMode)
                 && pLobby.StartRace(pClient.mPlayerId, requestedRoom->mId))
             {
                 pRaces[requestedRoom->mId] = std::move(race);
+                if (requestedRoom->mSettings.mRaceMode == RaceMode::Championship)
+                {
+                    pChampionships.emplace(requestedRoom->mId,
+                                            Championship(static_cast<int>(BuiltInTracks().size())));
+                    BroadcastRaceEvent(requestedRoom->mId, requestedRoom->mSettings.mTrackIndex,
+                                       pChampionships.find(requestedRoom->mId)->second,
+                                       pRaces[requestedRoom->mId], pLobby, pClients);
+                }
                 BroadcastLobbySnapshot(pLobby, pClients);
                 return;
             }
@@ -335,16 +389,30 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         double steering = 0.0;
         int jump = 0;
         int reverseFacing = 0;
+        int fire = 0;
+        int recover = 0;
+        int steeringAssist = 0;
+        int brakingAssist = 0;
+        int craftClass = 0;
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
         std::map<LobbyRoomId, AuthoritativeRace>::iterator race = pRaces.find(roomId);
-        if (fields.size() == 4 && race != pRaces.end()
+        if (fields.size() == 9 && race != pRaces.end()
             && ParseDouble(fields[0], throttle) && ParseDouble(fields[1], steering)
             && ParseInteger(fields[2], jump) && ParseInteger(fields[3], reverseFacing)
-            && (jump == 0 || jump == 1) && (reverseFacing == 0 || reverseFacing == 1)
+            && ParseInteger(fields[4], fire) && ParseInteger(fields[5], recover)
+            && ParseInteger(fields[6], steeringAssist) && ParseInteger(fields[7], brakingAssist)
+            && ParseInteger(fields[8], craftClass)
+            && (jump == 0 || jump == 1)
+            && (reverseFacing == 0 || reverseFacing == 1) && (fire == 0 || fire == 1)
+            && (recover == 0 || recover == 1)
+            && (steeringAssist == 0 || steeringAssist == 1) && (brakingAssist == 0 || brakingAssist == 1)
+            && craftClass >= static_cast<int>(CraftClass::Balanced)
+            && craftClass <= static_cast<int>(CraftClass::Control)
             && std::isfinite(throttle) && std::isfinite(steering)
             && std::fabs(throttle) <= 1.0 && std::fabs(steering) <= 1.0
             && race->second.SubmitInput({pClient.mPlayerId, throttle, steering,
-                                         jump != 0, reverseFacing != 0}))
+                                         jump != 0, reverseFacing != 0, fire != 0, recover != 0,
+                                         steeringAssist != 0, brakingAssist != 0, craftClass}))
             return;
     }
     else if (command == "SET")
@@ -416,6 +484,7 @@ int main(int pArgumentCount, char* pArguments[])
               << ") listening on TCP port " << port << std::endl;
     Lobby lobby;
     std::map<LobbyRoomId, AuthoritativeRace> races;
+    std::map<LobbyRoomId, Championship> championships;
     std::vector<ClientConnection> clients;
     while (true)
     {
@@ -456,14 +525,14 @@ int main(int pArgumentCount, char* pArguments[])
             const ssize_t received = recv(client.mSocket, buffer, sizeof(buffer), 0);
             if (received <= 0)
             {
-                RemoveClient(clients, index, lobby, races);
+                RemoveClient(clients, index, lobby, races, championships);
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }
             client.mReceiveBuffer.append(buffer, static_cast<std::size_t>(received));
             if (client.mReceiveBuffer.size() > kMaximumReceiveBuffer)
             {
-                RemoveClient(clients, index, lobby, races);
+                RemoveClient(clients, index, lobby, races, championships);
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }
@@ -474,7 +543,7 @@ int main(int pArgumentCount, char* pArguments[])
                 client.mReceiveBuffer.erase(0, lineEnd + 1);
                 if (!line.empty() && line.back() == '\r')
                     line.pop_back();
-                HandleCommand(client, line, lobby, races, clients);
+                HandleCommand(client, line, lobby, races, championships, clients);
             }
             ++index;
         }
@@ -491,12 +560,46 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 BroadcastRaceSnapshot(race->first, race->second, lobby, clients);
                 BroadcastRaceHudSnapshot(race->first, race->second, lobby, clients);
+                std::map<LobbyRoomId, Championship>::iterator championship = championships.find(race->first);
+                if (championship != championships.end())
+                {
+                    std::vector<int> positions;
+                    const RaceSnapshot snapshot = race->second.Snapshot();
+                    for (const RaceRacerSnapshot& racer : snapshot.mRacers)
+                        positions.push_back(racer.mPosition);
+                    championship->second.RecordResults(positions);
+                    if (championship->second.AdvanceEvent())
+                    {
+                        const LobbyRoom* room = nullptr;
+                        for (const LobbyRoom& candidate : lobby.Rooms())
+                        {
+                            if (candidate.mId == race->first)
+                            {
+                                room = &candidate;
+                                break;
+                            }
+                        }
+                        const int nextTrack = championship->second.CurrentEvent()
+                            % static_cast<int>(BuiltInTracks().size());
+                        AuthoritativeRace nextRace;
+                        if (room != nullptr && nextRace.Start(room->mPlayerIds, nextTrack,
+                            room->mSettings.mLapCount, room->mSettings.mWeaponsAllowed,
+                            room->mSettings.mRivalCount, room->mSettings.mRaceMode))
+                        {
+                            race->second = std::move(nextRace);
+                            BroadcastRaceEvent(race->first, nextTrack, championship->second,
+                                               race->second, lobby, clients);
+                            continue;
+                        }
+                    }
+                    championships.erase(championship);
+                }
                 BroadcastRaceFinished(race->first, lobby, clients);
                 completedRaces.push_back(race->first);
             }
         }
         for (LobbyRoomId roomId : completedRaces)
-            StopRace(lobby, races, roomId);
+            StopRace(lobby, races, championships, roomId);
         if (!completedRaces.empty())
             BroadcastLobbySnapshot(lobby, clients);
     }

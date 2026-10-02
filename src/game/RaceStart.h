@@ -5,7 +5,7 @@
 class RaceStart
 {
 public:
-    explicit RaceStart(double pSeconds = 3.0);
+    explicit RaceStart(double pSeconds = 6.0);
 
     void Reset();
     void Begin();
@@ -14,6 +14,7 @@ public:
     bool CountdownActive() const { return mCountingDown && !mStarted; }
     bool Started() const { return mStarted; }
     int LightsLit() const;
+    int SecondsRemaining() const;
 
 private:
     double mDuration;

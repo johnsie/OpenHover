@@ -41,3 +41,10 @@ int RaceStart::LightsLit() const
     const int lights = static_cast<int>((mDuration - mRemaining) * 3.0 / mDuration) + 1;
     return lights > 3 ? 3 : lights;
 }
+
+int RaceStart::SecondsRemaining() const
+{
+    if (!mCountingDown || mStarted)
+        return 0;
+    return static_cast<int>(mRemaining + 0.999999);
+}

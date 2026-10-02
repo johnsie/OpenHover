@@ -26,6 +26,7 @@ struct HovercraftState
     double mEngineThrust = 0.0;
     double mFuel = 1.0;
     double mBoostEnergy = 1.0;
+    double mPadBoostSeconds = 0.0;
     double mSpinOutSeconds = 0.0;
     bool mBoosting = false;
     bool mHasPreviousPosition = false;
@@ -65,6 +66,7 @@ public:
     explicit Hovercraft(const HovercraftTuning& pTuning = HovercraftTuning());
 
     void Reset(const HovercraftState& pState = HovercraftState());
+    void SetTuning(const HovercraftTuning& pTuning);
     void Step(const HovercraftInput& pInput, double pSeconds);
 
     const HovercraftState& State() const { return mState; }
