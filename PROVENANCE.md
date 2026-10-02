@@ -28,6 +28,7 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `README.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
 | `assets/screenshots/harbor-loop-gameplay.png` | Original | Maintainer, with AI assistance (GitHub Copilot) | CC BY 4.0 | Screenshot captured from the OpenHover runtime |
 | `.gitignore` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
+| `.github/copilot-instructions.md` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | project-wide development instructions |
 | `PROVENANCE.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | this ledger |
 | `CMakeLists.txt` | Original | Maintainer, with AI assistance (Claude, GitHub Copilot) | MIT OR Apache-2.0 | SDL2/OpenGL interactive executable |
 | `src/AudioFeedback.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Procedural SDL audio feedback API |

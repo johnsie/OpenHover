@@ -1,145 +1,158 @@
-# OpenHover roadmap
+# OpenHover Roadmap
 
-This is an original delivery plan for OpenHover. It uses the intended product direction of
-HoverNet-style hovercraft racing as inspiration: fast controllable craft, competitive circuit
-racing, distinct courses, accessible multiplayer, and a durable track ecosystem. It does not
-reuse source, assets, track data, or text from HoverNet Classic or HoverRace.
+OpenHover is an original hover-racing game built around clear, satisfying races that players can
+start quickly, understand immediately, and want to run again. This plan starts from the current
+playable build, not from an empty prototype. It does not reuse source, assets, track data, or text
+from HoverRace or HoverNet Classic; all future work follows the [clean-room policy](clean-room-policy.md).
 
-Before a milestone adopts a specific legacy behaviour, record it as a black-box player-facing
-requirement and test it under the [clean-room policy](clean-room-policy.md). Product research
-may describe observable features; implementation work must remain independent.
+## Current Baseline
 
-## Product pillars
+The game already has a fixed-step hovercraft simulation; three original tracks; sealed route
+crossings; laps, checkpoints, timing, positions, results, championships, AI rivals, craft classes,
+boost pads, hazards, raised sections, recovery, driving assists, missiles, mines, replays, gamepad
+input, and procedural audio. Local races and authoritative online races share the same core rules.
+Online play includes a public room lobby, host settings, countdowns, interpolation, chat, race
+results, and a deployed server.
 
-- **Responsive hover racing:** readable handling, boost management, collision feedback, and
-  recovery that keeps players in the race.
-- **Competitive racing:** checkpoints, laps, rivals, a clear race result, and fair course rules.
-- **Courses with character:** original tracks built around alternate lines, elevation, hazards,
-  boosts, and strong visual landmarks.
-- **Race together:** local play first, then network racing built on deterministic simulation and
-  replay validation.
-- **Open creation:** documented original track formats, safe sharing, and clear provenance for
-  every community contribution.
+This baseline is an inventory, not a claim that any system is finished. Every existing feature can
+be improved when testing, play feedback, accessibility review, performance data, or online/offline
+parity exposes a better player experience. The next work is not to add features indiscriminately;
+it is to make the existing game easier to read, easier to control, more reliable with other
+players, and more rewarding from the first race through a complete event.
 
-## Visual development plan
+## Product Rules
 
-The current SDL/OpenGL presentation is a functional prototype, not a visual target. Do not treat
-new HUD bars, colours, or isolated primitive shapes as a substitute for a coherent track scene.
-Visual work proceeds in this order:
+- **Drive first:** a player should reach a race in a few clear choices, with no unexplained state
+  or hidden control.
+- **Read the road:** road edges, gates, hazards, rivals, and the next decision must remain clear
+  at racing speed. A route may never depend on a player guessing where they are allowed to drive.
+- **Fast recovery:** a mistake should cost time and create tension, not leave the player confused,
+  trapped, or waiting.
+- **Useful feedback:** HUD, sound, camera, and results should answer what happened and what to do
+  next without crowding the driving view.
+- **Parity is mandatory:** online and offline racing must offer equivalent rules and player-facing
+  feedback. Any exception needs documented player impact, follow-up work, and focused coverage.
+- **Original and maintainable:** new code, assets, tracks, and dependencies require provenance and
+  must strengthen the game rather than add a one-off demonstration.
 
-1. **Connected circuit geometry:** replace independent road strips with joined road meshes,
-   consistent corners, continuous wall extrusion, reliable track-edge collision, and no visible
-   gaps, floating markers, or overlapping panels.
-2. **Renderer baseline:** establish original materials, directional lighting, controlled fog,
-   terrain/sky separation, depth cues, and stable chase-camera framing before visual polish.
-3. **Original modular assets:** author a coherent hovercraft family, road modules, wall modules,
-   route markers, gates, boost pads, finish treatment, and landmark props. Every asset must have
-   recorded origin and licence; reference images only inform high-level observable needs such as
-   a readable skirted craft silhouette, enclosed cockpit, and visible propulsion hardware.
-4. **Track art direction:** give each original course a distinct environment, palette, skyline,
-   terrain treatment, landmarks, and route story. Road width, wall contrast, and turn cues must
-   support speed and decision-making rather than decoration alone.
-5. **Visual review gates:** capture desktop screenshots and gameplay clips for each track after
-   every major rendering change. Fix geometry seams, weak silhouettes, unreadable turns, HUD
-   occlusion, and poor contrast before adding the next layer of polish.
+## Milestone 1: Make Every Lap Feel Good
 
-The goal is not to reproduce another game's artwork, layouts, or assets. It is to reach an
-original, professional racing presentation with the same player-facing fundamentals: coherent
-world scale, readable boundaries, visible route intent, and a craft that feels physically present.
+**Goal:** turn the current race into a polished, learnable driving experience.
 
-## Milestone 0: Core race loop
+- Review every track at racing speed for wall gaps, camera clipping, ambiguous turns, gate approach
+  space, spawn safety, recovery placement, and route shortcuts that bypass intended progression.
+- Replace disconnected road and wall pieces with continuous corner geometry where it improves
+  collision reliability and makes the legal route obvious before the player reaches it.
+- Tune acceleration, turning, drift, jump, boost pads, wall rebound, hazards, mines, and recovery
+  using recorded runs and targeted playtests; publish the resulting tuning principles.
+- Improve the chase camera: stable framing through turns and jumps, configurable distance and
+  motion comfort, and no HUD or geometry obscuring the craft or next corner.
+- Make the active route unmistakable with a compact course map, a next-gate cue, clear wrong-way
+  feedback, and distinct visual treatment for finish, checkpoint, boost, hazard, and raised route.
+- Add a short in-game controls and practice flow that teaches steering, boost pads, jumping,
+  recovery, checkpoints, and weapons through play rather than a dense text screen.
+- Audit keyboard and gamepad bindings; support remapping, sensible defaults, device prompts, and
+  pause-menu access to controls and accessibility settings.
 
-**Goal:** make the current prototype consistently fun for a first-time player.
+**Exit criteria:** a new player can finish every bundled track without outside help, understands
+why a lap did or did not count, and can recover from an error within a few seconds.
 
-- Move simulation to a fixed timestep and add deterministic input recordings.
-- Tune acceleration, turning, drift, boost drain, boost pads, collisions, and off-road recovery
-  against player-facing tests.
-- Add a finish/results screen with lap times, restart, and race settings.
-- Add a persistent race HUD with a compact course map, next-gate direction, position, speed,
-  lap state, and clearly separated resource/status meters.
-- Add current-lap, best-lap, and sector/split timing so each run gives immediate performance
-  feedback, including a concise finish summary.
-- Make speed and route choice legible with broad road surfaces, high-contrast guard walls,
-  corner-direction markers, and unambiguous wrong-way feedback.
-- Support a stable low chase camera and optional camera-distance setting so the craft, road edges,
-  and approaching corners remain readable at racing speed.
-- Add original engine, boost, collision, checkpoint, and menu sound effects.
-- Establish frame-time, startup-time, and gameplay regression checks.
+## Milestone 2: Improve Race Flow And Competition
 
-**Exit criteria:** a three-lap race is playable with keyboard and gamepad, can be restarted
-without restarting the program, and has deterministic smoke coverage for every race rule.
+**Goal:** make setup, racing, results, and the next race feel like one coherent experience.
 
-## Milestone 1: Tracks and race modes
+- Simplify local race setup around track, mode, laps, rivals, class, assists, and weapons; keep
+  descriptions concise and expose only settings that change the selected mode.
+- Give each craft class a genuinely distinct role, silhouette, handling explanation, and balanced
+  use case. Validate its performance against AI and player recordings on every track.
+- Improve AI racing lines, overtaking, avoidance, weapons, recovery, and difficulty scaling so a
+  full grid feels competitive without relying on rubber-banding or erratic collisions.
+- Expand results into a readable event summary: finishing order, lap and split improvement, class,
+  championship points, rematch, next event, and return-to-setup actions.
+- Make championship progression explain itself before and after every event, including standings,
+  points changes, the next track, and a clear completion screen.
+- Turn replay recording into a player feature with ghost selection, best-lap comparison, playback
+  controls, and reliable invalidation when the relevant physics or track version changes.
+- Add a small, deliberate audio pass for engine load, boost, landing, walls, gates, rival contact,
+  results, and menu focus; include independent volume controls and visual alternatives.
 
-**Goal:** turn the arena into a small racing game rather than a single demonstration circuit.
+**Exit criteria:** a player can run a complete local championship, understand each result, choose a
+meaningful rematch or next action, and see a clear reason to improve their next lap.
 
-- Define a versioned, documented OpenHover track format with validation and provenance metadata.
-- Build three original tracks: a beginner circuit, a technical circuit, and a high-speed course.
-- Add track-select, lap-count, rival-count, and difficulty options.
-- Add time trial, free practice, single race, and championship events.
-- Add track features such as banked turns, jumps, shortcuts with trade-offs, boost routes, and
-  recoverable hazards.
-- Use contrasting original road, water, hazard, and restricted-route surface treatments to make
-  safe lines, penalties, and alternate routes readable before the player reaches them.
-- Add physical route control: strong guard walls, blocked-route panels, finish-zone markings,
-  and clear entry/exit cues at every track junction.
-- Give every track an original environmental identity through its skyline silhouettes, sky,
-  landmark props, road treatment, lighting, and audio ambience without importing legacy art.
-- Make each course readable at speed with a large always-visible course map, racer markers,
-  next-gate direction, repeated turn markers, and a distinct finish-zone treatment.
+## Milestone 3: Make Online Racing Trustworthy
 
-**Exit criteria:** every mode completes cleanly on every bundled track, and track loading rejects
-invalid or unrecorded content with actionable errors.
+**Goal:** make joining and completing an online race as understandable and dependable as local play.
 
-## Milestone 2: Competitive depth
+- Improve lobby UX with connection state, server version, player presence, room capacity, host
+  status, selected track preview, race settings, readiness, and clear join/leave/start feedback.
+- Add protocol and content compatibility negotiation before joining a race; show an actionable
+  update or missing-track message instead of accepting an incompatible client.
+- Add reconnect and graceful disconnect behavior, including a clear race outcome, host migration
+  rules, timeout feedback, and a return path to the lobby.
+- Test latency, packet loss, delayed snapshots, reconnects, server restarts, and mixed input rates
+  with automated integration tests and player-visible error states.
+- Preserve parity for every shared race change: server authority, replication, interpolation,
+  rendering, HUD feedback, audio cues, results, and focused offline/online coverage must land
+  together.
+- Provide a private-room path before matchmaking, then add lightweight invitations or room codes
+  only after the core join flow is robust.
+- Define an abuse and privacy baseline: name rules, chat reporting/muting, rate limits, transport
+  security, server observability, and a documented compatibility policy.
 
-**Goal:** make repeated races strategically interesting and legible.
+**Exit criteria:** two players on normal home connections can create, join, race, finish, rematch,
+and recover from a short interruption with agreed authoritative results and no unexplained state.
 
-- Add multiple AI personalities with tunable pace, overtaking, recovery, and boost use.
-- Add starting grids, race position calculation, sector/split timing, and standings.
-- Expose rival position and event state through the HUD and results screen without obscuring the
-  driving view; use concise symbols, colour, and spatial layout rather than dense text.
-- Add optional assist settings for steering, braking, and recovery.
-- Add a small roster of original craft classes with distinct handling and readable silhouettes.
-- Add replay recording and playback from deterministic input streams.
-- Run structured playtests and maintain a public balancing changelog.
+## Milestone 4: Give Tracks Identity And Depth
 
-**Exit criteria:** an event with a full grid produces stable placements, competitive AI, and a
-replay that agrees with the recorded result.
+**Goal:** make each course memorable, readable, and worth replaying.
 
-## Milestone 3: Local and online racing
+- Establish a cohesive original art direction for road surfaces, walls, terrain, sky, lighting,
+  landmarks, gates, pads, hazards, and craft materials. Replace prototype primitives where they
+  interfere with readability or sense of speed.
+- Give each bundled track a distinct racing lesson and visual identity: an approachable flow track,
+  a technical precision track, and a high-speed risk/reward track.
+- Add alternate routes only when their entry, exit, risk, and reward are readable at speed and
+  validated by timing data. Avoid shortcuts that create ambiguous lap validation.
+- Use elevation, jumps, hazards, pads, and weapons deliberately, with safe sight lines and a
+  recoverable outcome for every failed attempt.
+- Add screenshot and gameplay-review gates for desktop and common low-resolution layouts; fix
+  overlap, contrast, framing, and unreadable turn problems before expanding content.
+- Build additional tracks only after the first three meet their readability and replayability
+  targets. Each new track needs an authored route review, race recordings, and provenance.
 
-**Goal:** support shared competitive play without compromising race integrity.
+**Exit criteria:** each bundled track is visually distinct, has a clear racing identity, and earns
+repeat runs because players can see and learn its decisions.
 
-- Add split-screen local multiplayer with controller assignment and per-player HUDs.
-- Design a versioned network protocol around inputs, simulation ticks, and authoritative results.
-- Add private online lobbies, ready checks, disconnect handling, and race result synchronization.
-- Add ghost sharing for time trials before ranked or public matchmaking.
-- Add latency simulation and network regression tests before public online play.
+## Milestone 5: Release-Ready Foundation And Creation
 
-**Exit criteria:** two players can finish a complete race locally and over a supported network path
-with agreed results and recoverable disconnect behavior.
+**Goal:** make the game safe to distribute, support, and extend without weakening the race.
 
-## Milestone 4: Creation and release
+- Bring the README, multiplayer guide, controls, and release notes in line with the implemented
+  game; remove claims that describe already-shipped systems as future work.
+- Complete Linux release polish, crash/error reporting, stable preferences, clean first-run setup,
+  and verification on the supported controller and renderer combinations.
+- Add accessibility options for remapping, colour and contrast, text scale, reduced camera motion,
+  audio mixing, and non-audio race feedback.
+- Evolve the documented track format and validation tools into a creator workflow. Validate route
+  continuity, sealed crossings, gate placement, spawn safety, content provenance, and version
+  compatibility before a track can be shared.
+- Integrate the existing catalogue and verified downloader into player-facing track browsing only
+  after clear source, licensing, update, compatibility, and offline behavior are in place.
+- Maintain build, smoke, integration, performance, deployment, and provenance checks; publish
+  concise release notes that name player-facing changes and known limitations.
 
-**Goal:** make OpenHover a maintainable, shareable game project.
+**Exit criteria:** a first-time player can install, configure, play, and update the game without
+manual intervention, while a contributor can build and validate an original track with clear rules.
 
-- Ship a track editor or documented creator workflow with validation tooling.
-- Add signed or hash-verified track packages, clear licences, and contributor provenance checks.
-- Package Linux builds first, then add other supported platforms with controller and renderer
-  verification.
-- Add accessibility settings for input remapping, colour, camera motion, audio, and subtitles.
-- Publish release notes, credits, third-party notices, and an asset provenance audit for every
-  release.
+## Planning Discipline
 
-**Exit criteria:** a new contributor can build the game, create a valid original track, and share
-it with an unambiguous licence and provenance record.
-
-## Ordering rules
-
-- Finish a playable, tested core race before adding online features or creator tools.
-- Prefer original implementations and observable behavior specifications over compatibility work.
-- Add no dependency, asset, track, or document without satisfying the repository's licensing and
-  provenance requirements.
-- Revisit scope after each milestone using playtest evidence, stability data, and contributor
-  capacity rather than a fixed calendar.
+- Treat every shipped system as improvable. Preserve what works, but revisit controls, rules,
+  presentation, performance, and flow whenever evidence shows that players are confused or a
+  clearer, fairer, more accessible experience is possible.
+- Fix confusion and reliability before adding breadth. A feature that obscures the route, breaks
+  parity, or complicates race flow does not advance the roadmap.
+- Every milestone item needs an observable player outcome, a focused validation plan, and a clear
+  owner before implementation starts.
+- Use playtest evidence, telemetry, recordings, and support issues to reprioritize quarterly.
+- Keep changes small enough to verify locally and online; do not merge a shared race rule with one
+  path unimplemented.

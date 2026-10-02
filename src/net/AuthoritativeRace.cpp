@@ -57,9 +57,9 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
     mRaisedSections = track.mRaisedSections;
     const RaceGate finish = track.Finish();
     mFinish = finish;
-    const RaceGate next = track.mWaypoints.size() > 1 ? track.mWaypoints[1] : finish;
-    double forwardX = next.mX - finish.mX;
-    double forwardY = next.mY - finish.mY;
+    const RaceGate turn = track.mWaypoints.empty() ? finish : track.mWaypoints.front();
+    double forwardX = turn.mX - finish.mX;
+    double forwardY = turn.mY - finish.mY;
     const double length = std::sqrt(forwardX * forwardX + forwardY * forwardY);
     if (length > 0.0)
     {

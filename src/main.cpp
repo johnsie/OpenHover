@@ -1120,14 +1120,14 @@ void DrawTrackEnvironment(const TrackDefinition& pTrack)
     }
 }
 
-void DrawFinishZone(const std::vector<RaceGate>& pWaypoints, double pTrackHalfWidth)
+void DrawFinishZone(const RaceGate& pFinish, const std::vector<RaceGate>& pWaypoints,
+                    double pTrackHalfWidth)
 {
     if (pWaypoints.size() < 2 || pTrackHalfWidth <= 0.0)
         return;
-    const RaceGate& finish = pWaypoints.front();
-    const RaceGate& next = pWaypoints[1];
-    double forwardX = next.mX - finish.mX;
-    double forwardZ = next.mY - finish.mY;
+    const RaceGate& turn = pWaypoints.front();
+    double forwardX = turn.mX - pFinish.mX;
+    double forwardZ = turn.mY - pFinish.mY;
     const double length = std::sqrt(forwardX * forwardX + forwardZ * forwardZ);
     if (length == 0.0)
         return;
@@ -1150,14 +1150,14 @@ void DrawFinishZone(const std::vector<RaceGate>& pWaypoints, double pTrackHalfWi
             glColor3f(color, color, color);
             glBegin(GL_QUADS);
             glNormal3d(0.0, 1.0, 0.0);
-            glVertex3d(finish.mX + forwardX * start + sideX * left, 0.4,
-                       finish.mY + forwardZ * start + sideZ * left);
-            glVertex3d(finish.mX + forwardX * end + sideX * left, 0.4,
-                       finish.mY + forwardZ * end + sideZ * left);
-            glVertex3d(finish.mX + forwardX * end + sideX * right, 0.4,
-                       finish.mY + forwardZ * end + sideZ * right);
-            glVertex3d(finish.mX + forwardX * start + sideX * right, 0.4,
-                       finish.mY + forwardZ * start + sideZ * right);
+            glVertex3d(pFinish.mX + forwardX * start + sideX * left, 0.4,
+                       pFinish.mY + forwardZ * start + sideZ * left);
+            glVertex3d(pFinish.mX + forwardX * end + sideX * left, 0.4,
+                       pFinish.mY + forwardZ * end + sideZ * left);
+            glVertex3d(pFinish.mX + forwardX * end + sideX * right, 0.4,
+                       pFinish.mY + forwardZ * end + sideZ * right);
+            glVertex3d(pFinish.mX + forwardX * start + sideX * right, 0.4,
+                       pFinish.mY + forwardZ * start + sideZ * right);
             glEnd();
         }
     }
@@ -1174,14 +1174,14 @@ void DrawFinishZone(const std::vector<RaceGate>& pWaypoints, double pTrackHalfWi
             const float color = (row + column) % 2 == 0 ? 0.96f : 0.03f;
             glColor3f(color, color, color);
             glBegin(GL_QUADS);
-            glVertex3d(finish.mX + sideX * left - forwardX * 0.04, bottom,
-                       finish.mY + sideZ * left - forwardZ * 0.04);
-            glVertex3d(finish.mX + sideX * right - forwardX * 0.04, bottom,
-                       finish.mY + sideZ * right - forwardZ * 0.04);
-            glVertex3d(finish.mX + sideX * right - forwardX * 0.04, top,
-                       finish.mY + sideZ * right - forwardZ * 0.04);
-            glVertex3d(finish.mX + sideX * left - forwardX * 0.04, top,
-                       finish.mY + sideZ * left - forwardZ * 0.04);
+            glVertex3d(pFinish.mX + sideX * left - forwardX * 0.04, bottom,
+                       pFinish.mY + sideZ * left - forwardZ * 0.04);
+            glVertex3d(pFinish.mX + sideX * right - forwardX * 0.04, bottom,
+                       pFinish.mY + sideZ * right - forwardZ * 0.04);
+            glVertex3d(pFinish.mX + sideX * right - forwardX * 0.04, top,
+                       pFinish.mY + sideZ * right - forwardZ * 0.04);
+            glVertex3d(pFinish.mX + sideX * left - forwardX * 0.04, top,
+                       pFinish.mY + sideZ * left - forwardZ * 0.04);
             glEnd();
         }
     }
@@ -3426,7 +3426,7 @@ int main(int pArgumentCount, char* pArguments[])
     std::vector<Race> rivalRaces(kRivalCount, Race(checkpoints, finish, targetLaps));
     LapTimer lapTimer;
     RaceStart raceStart;
-    std::vector<RaceGate> rivalRoute(courseWaypoints.begin() + 1, courseWaypoints.end());
+    std::vector<RaceGate> rivalRoute(courseWaypoints);
     rivalRoute.push_back(finish);
     std::vector<RivalTuning> rivalTunings(kRivalCount);
     rivalTunings[0].mPace = 1.0;
@@ -3446,9 +3446,9 @@ int main(int pArgumentCount, char* pArguments[])
     std::vector<HovercraftState> rivalSpawns(kRivalCount);
     const auto configureStartGrid = [&]()
     {
-        const RaceGate& firstCheckpoint = checkpoints.empty() ? finish : checkpoints.front();
-        double forwardX = firstCheckpoint.mX - finish.mX;
-        double forwardY = firstCheckpoint.mY - finish.mY;
+        const RaceGate& turn = courseWaypoints.empty() ? finish : courseWaypoints.front();
+        double forwardX = turn.mX - finish.mX;
+        double forwardY = turn.mY - finish.mY;
         const double length = std::sqrt(forwardX * forwardX + forwardY * forwardY);
         if (length > 0.0)
         {
@@ -3567,7 +3567,7 @@ int main(int pArgumentCount, char* pArguments[])
         raisedSections = selectedTrack.mRaisedSections;
         race = Race(checkpoints, finish, targetLaps);
         rivalRaces.assign(kRivalCount, Race(checkpoints, finish, targetLaps));
-        rivalRoute.assign(courseWaypoints.begin() + 1, courseWaypoints.end());
+        rivalRoute = courseWaypoints;
         rivalRoute.push_back(finish);
         configureStartGrid();
         rebuildRivalControllers();
@@ -4826,7 +4826,7 @@ int main(int pArgumentCount, char* pArguments[])
                        selectedTrack.mRoadRed, selectedTrack.mRoadGreen, selectedTrack.mRoadBlue,
                        selectedTrack.mWallRed, selectedTrack.mWallGreen, selectedTrack.mWallBlue, roadTexture,
                        wallTexture);
-            DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
+            DrawFinishZone(finish, courseWaypoints, selectedTrack.mRoadHalfWidth);
             int onlineActiveCheckpoint = 0;
             for (const OnlineRacerView& racer : gOnlineRacers)
             {
@@ -4896,7 +4896,7 @@ int main(int pArgumentCount, char* pArguments[])
                    selectedTrack.mRoadRed, selectedTrack.mRoadGreen, selectedTrack.mRoadBlue,
                    selectedTrack.mWallRed, selectedTrack.mWallGreen, selectedTrack.mWallBlue, roadTexture,
                    wallTexture);
-        DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
+        DrawFinishZone(finish, courseWaypoints, selectedTrack.mRoadHalfWidth);
         DrawCheckpointGates(courseWaypoints, checkpoints, race.Progress().mNextCheckpoint,
                     selectedTrack.mRoadHalfWidth);
         for (const BoostPad& pad : boostPads)

@@ -1,7 +1,49 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "TrackDefinition.h"
 
+#include <algorithm>
+#include <cmath>
 #include <set>
+
+namespace
+{
+RaceGate GateBeforeTurn(const RaceGate& pGate, const std::vector<RaceGate>& pWaypoints,
+                        double pRoadHalfWidth)
+{
+    if (pWaypoints.size() < 2)
+        return pGate;
+
+    int closestWaypoint = 0;
+    double closestDistanceSquared = -1.0;
+    for (int index = 0; index < static_cast<int>(pWaypoints.size()); ++index)
+    {
+        const double deltaX = pGate.mX - pWaypoints[index].mX;
+        const double deltaY = pGate.mY - pWaypoints[index].mY;
+        const double distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        if (closestDistanceSquared < 0.0 || distanceSquared < closestDistanceSquared)
+        {
+            closestDistanceSquared = distanceSquared;
+            closestWaypoint = index;
+        }
+    }
+
+    const RaceGate& turn = pWaypoints[closestWaypoint];
+    const RaceGate& previous = pWaypoints[(closestWaypoint + pWaypoints.size() - 1)
+        % pWaypoints.size()];
+    const double directionX = turn.mX - previous.mX;
+    const double directionY = turn.mY - previous.mY;
+    const double length = std::sqrt(directionX * directionX + directionY * directionY);
+    if (length == 0.0)
+        return pGate;
+
+    const double clearance = std::min(length * 0.45, pRoadHalfWidth + 2.0);
+    RaceGate result = pGate;
+    result.mX = turn.mX - directionX / length * clearance;
+    result.mY = turn.mY - directionY / length * clearance;
+    result.mRadius = std::max(result.mRadius, pRoadHalfWidth + 0.5);
+    return result;
+}
+}
 
 std::string TrackDefinition::Validate() const
 {
@@ -65,12 +107,17 @@ std::string TrackDefinition::Validate() const
 
 RaceGate TrackDefinition::Finish() const
 {
-    return mWaypoints.empty() ? RaceGate() : mWaypoints.front();
+    return mWaypoints.empty() ? RaceGate()
+        : GateBeforeTurn(mWaypoints.front(), mWaypoints, mRoadHalfWidth);
 }
 
 std::vector<RaceGate> TrackDefinition::Checkpoints() const
 {
-    return mCheckpoints;
+    std::vector<RaceGate> checkpoints;
+    checkpoints.reserve(mCheckpoints.size());
+    for (const RaceGate& checkpoint : mCheckpoints)
+        checkpoints.push_back(GateBeforeTurn(checkpoint, mWaypoints, mRoadHalfWidth));
+    return checkpoints;
 }
 
 const std::vector<TrackDefinition>& BuiltInTracks()

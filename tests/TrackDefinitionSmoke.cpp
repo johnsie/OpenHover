@@ -47,6 +47,33 @@ int main()
             std::cerr << "built-in track did not preserve its intended obstacle profile\n";
             return 1;
         }
+        const double requiredGateClearance = track.mRoadHalfWidth + 2.0 - 0.0001;
+        const auto checkGateClearance = [&track, requiredGateClearance](const RaceGate& gate)
+        {
+            double nearestDistance = -1.0;
+            for (const RaceGate& waypoint : track.mWaypoints)
+            {
+                const double deltaX = gate.mX - waypoint.mX;
+                const double deltaY = gate.mY - waypoint.mY;
+                const double distance = std::sqrt(deltaX * deltaX + deltaY * deltaY);
+                if (nearestDistance < 0.0 || distance < nearestDistance)
+                    nearestDistance = distance;
+            }
+            return nearestDistance >= requiredGateClearance;
+        };
+        if (!checkGateClearance(track.Finish()))
+        {
+            std::cerr << "finish gate could be bypassed at a turn\n";
+            return 1;
+        }
+        for (const RaceGate& checkpoint : track.Checkpoints())
+        {
+            if (!checkGateClearance(checkpoint))
+            {
+                std::cerr << "checkpoint gate could be bypassed at a turn\n";
+                return 1;
+            }
+        }
     }
 
     TrackDefinition invalid;
