@@ -13,7 +13,7 @@ int main()
     HovercraftState state;
 
     HovercraftInput initialInput = controller.InputFor(state);
-    if (initialInput.mThrottle != 1.0 || initialInput.mSteering != 0.0 || !initialInput.mBoost)
+    if (initialInput.mThrottle != 1.0 || initialInput.mBoost)
     {
         std::cerr << "rival did not accelerate directly toward its first target\n";
         return 1;
@@ -36,12 +36,11 @@ int main()
 
     RivalTuning cautiousTuning;
     cautiousTuning.mPace = 0.65;
-    cautiousTuning.mBoostDistanceMultiplier = 20.0;
     RivalController cautiousController(route, cautiousTuning);
     HovercraftInput cautiousInput = cautiousController.InputFor(HovercraftState());
     if (cautiousInput.mThrottle != 0.65 || cautiousInput.mBoost)
     {
-        std::cerr << "rival tuning did not control pace and boost use\n";
+        std::cerr << "rival tuning did not control pace\n";
         return 1;
     }
 
@@ -49,12 +48,23 @@ int main()
     const RivalTuning standardTuning = TuneRivalForDifficulty(cautiousTuning, RivalDifficulty::Standard);
     const RivalTuning expertTuning = TuneRivalForDifficulty(cautiousTuning, RivalDifficulty::Expert);
     if (relaxedTuning.mPace >= standardTuning.mPace || relaxedTuning.mSteeringGain >= standardTuning.mSteeringGain
-        || relaxedTuning.mBoostDistanceMultiplier <= standardTuning.mBoostDistanceMultiplier
         || expertTuning.mPace <= standardTuning.mPace || expertTuning.mSteeringGain <= standardTuning.mSteeringGain
-        || expertTuning.mBoostDistanceMultiplier >= standardTuning.mBoostDistanceMultiplier
+        || expertTuning.mCornerLookAheadDistance <= standardTuning.mCornerLookAheadDistance
         || NextRivalDifficulty(RivalDifficulty::Expert) != RivalDifficulty::Relaxed)
     {
         std::cerr << "rival difficulty did not adjust tuning predictably\n";
+        return 1;
+    }
+
+    RivalController standardController(route, standardTuning);
+    RivalController expertController(route, expertTuning);
+    HovercraftState approachState;
+    approachState.mX = 2.0;
+    const HovercraftInput standardApproach = standardController.InputFor(approachState);
+    const HovercraftInput expertApproach = expertController.InputFor(approachState);
+    if (expertApproach.mSteering <= standardApproach.mSteering || expertApproach.mBoost)
+    {
+        std::cerr << "expert rival did not anticipate the upcoming corner\n";
         return 1;
     }
 

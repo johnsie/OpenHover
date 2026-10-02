@@ -39,14 +39,17 @@ HovercraftTuning CraftClassTuning(CraftClass pCraftClass)
     case CraftClass::Sprint:
         tuning.mAcceleration = 32.0;
         tuning.mTurnRate = 2.15;
-        tuning.mBoostAcceleration = 48.0;
-        tuning.mLinearDrag = 0.48;
+        tuning.mBoostAcceleration = 32.0;
+        tuning.mMaximumSpeed = 42.0;
+        tuning.mBoostMaximumSpeed = 48.0;
         break;
     case CraftClass::Control:
-        tuning.mAcceleration = 25.0;
+        tuning.mAcceleration = 22.0;
         tuning.mTurnRate = 3.0;
-        tuning.mBoostAcceleration = 34.0;
-        tuning.mLinearDrag = 0.72;
+        tuning.mBoostAcceleration = 24.0;
+        tuning.mLinearDrag = 0.55;
+        tuning.mMaximumSpeed = 27.0;
+        tuning.mBoostMaximumSpeed = 36.0;
         break;
     }
     return tuning;

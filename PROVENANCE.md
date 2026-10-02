@@ -14,6 +14,15 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
   the licence applies to them;** most were written with AI assistance (Claude), which is recorded in the
   notes. They still carry the old product name in places; rename them under OpenHover.
 
+## Design Research Records
+
+- **2026-10-02:** `johnsie/HoverNet`, revision `f1aea2c855b54e5c59ae20116efede3a5abf53cc`,
+  GrokkSoft HoverRace SourceCode License v1.0. Consulted checkpoint and finish-line source
+  declarations plus race-gate validation. Design question: how should OpenHover make lap
+  completion unambiguous with a small number of gates? High-level finding: use an explicit,
+  ordered sequence of authored race gates that is separate from the visual route geometry.
+  No source, identifiers, tests, data, assets, or file structure were copied.
+
 | Path | Origin | Authors | Licence status | Notes |
 | --- | --- | --- | --- | --- |
 | `README.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
@@ -21,6 +30,8 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `.gitignore` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | |
 | `PROVENANCE.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | this ledger |
 | `CMakeLists.txt` | Original | Maintainer, with AI assistance (Claude, GitHub Copilot) | MIT OR Apache-2.0 | SDL2/OpenGL interactive executable |
+| `src/AudioFeedback.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Procedural SDL audio feedback API |
+| `src/AudioFeedback.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Runtime-generated menu, boost, impact, and checkpoint sounds |
 | `LICENSE-MIT` | Original | The standard MIT text, with the project copyright line | licence text | MIT licence text itself |
 | `LICENSE-APACHE` | Third party: the Apache Software Foundation, https://www.apache.org/licenses/LICENSE-2.0.txt | Apache Software Foundation | the licence text itself (Apache-2.0) | Apache-2.0 licence text, unmodified (SHA-256 `cfc7749b`) |
 | `docs/licensing.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | needs legal review |
@@ -106,6 +117,11 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/LapTiming.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | lap timing API |
 | `src/game/LapTiming.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | current, last, and best lap timing |
 | `tests/LapTimingSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | lap timing test |
+| `tests/AudioFeedbackSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | audio feedback preference test |
+
+| `src/game/Missile.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic race missile API |
+| `src/game/Missile.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | accelerated bouncing missile and spin-out hits |
+| `tests/MissileSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | missile movement and impact test |
 
 ## Not carried over, on purpose
 

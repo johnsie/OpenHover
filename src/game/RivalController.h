@@ -18,8 +18,7 @@ struct RivalTuning
 {
     double mPace = 1.0;
     double mSteeringGain = 1.5;
-    double mBoostHeadingError = 0.2;
-    double mBoostDistanceMultiplier = 2.0;
+    double mCornerLookAheadDistance = 12.0;
 };
 
 RivalDifficulty NextRivalDifficulty(RivalDifficulty pDifficulty);

@@ -20,11 +20,36 @@ add_library(openhover_content STATIC src/content/TrackCatalog.cpp src/content/Tr
 target_include_directories(openhover_content PUBLIC src/content)
 target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 
-add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
+add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
 
-add_executable(OpenHover src/main.cpp)
-target_link_libraries(OpenHover PRIVATE openhover_game SDL2::SDL2 OpenGL::GL)
+add_library(openhover_lobby STATIC src/net/Lobby.cpp src/net/TcpLobbyClient.cpp)
+target_include_directories(openhover_lobby PUBLIC src/net)
+target_link_libraries(openhover_lobby PUBLIC openhover_game)
+
+if(UNIX)
+    add_executable(OpenHoverServer src/server/main.cpp)
+    target_link_libraries(OpenHoverServer PRIVATE openhover_lobby)
+    include(GNUInstallDirs)
+    install(TARGETS OpenHoverServer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/systemd/openhover-raceserver.service
+            DESTINATION lib/systemd/system)
+
+    set(CPACK_GENERATOR DEB)
+    set(CPACK_PACKAGE_NAME openhover-raceserver)
+    set(CPACK_PACKAGE_VERSION 0.1.0)
+    set(CPACK_PACKAGE_CONTACT "OpenHover Developers")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "OpenHover Developers")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm")
+    include(CPack)
+endif()
+
+add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
+target_link_libraries(OpenHover PRIVATE openhover_game openhover_lobby SDL2::SDL2 OpenGL::GL)
 
 if(BUILD_TESTING AND NOT WIN32)
     add_executable(TrackCatalogSmoke tests/TrackCatalogSmoke.cpp)
@@ -118,4 +143,27 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(RaisedSectionSmoke tests/RaisedSectionSmoke.cpp)
     target_link_libraries(RaisedSectionSmoke PRIVATE openhover_game)
     add_test(NAME RaisedSectionSmoke COMMAND RaisedSectionSmoke)
+
+    add_executable(AudioFeedbackSmoke tests/AudioFeedbackSmoke.cpp src/AudioFeedback.cpp)
+    target_include_directories(AudioFeedbackSmoke PRIVATE src)
+    target_link_libraries(AudioFeedbackSmoke PRIVATE SDL2::SDL2)
+    add_test(NAME AudioFeedbackSmoke COMMAND AudioFeedbackSmoke)
+
+    add_executable(MissileSmoke tests/MissileSmoke.cpp)
+    target_link_libraries(MissileSmoke PRIVATE openhover_game)
+    add_test(NAME MissileSmoke COMMAND MissileSmoke)
+
+    add_executable(MineSmoke tests/MineSmoke.cpp)
+    target_link_libraries(MineSmoke PRIVATE openhover_game)
+    add_test(NAME MineSmoke COMMAND MineSmoke)
+
+    add_executable(LobbySmoke tests/LobbySmoke.cpp)
+    target_link_libraries(LobbySmoke PRIVATE openhover_lobby)
+    add_test(NAME LobbySmoke COMMAND LobbySmoke)
+
+    if(UNIX)
+        add_executable(LobbyClientSmoke tests/LobbyClientSmoke.cpp)
+        target_link_libraries(LobbyClientSmoke PRIVATE openhover_lobby)
+        add_test(NAME LobbyClientSmoke COMMAND LobbyClientSmoke $<TARGET_FILE:OpenHoverServer>)
+    endif()
 endif()

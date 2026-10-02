@@ -21,9 +21,23 @@ int main()
         hovercraft.Step(forward, 1.0 / 60.0);
 
     const HovercraftState afterForward = hovercraft.State();
-    if (afterForward.mSpeed < 18.0 || afterForward.mX <= 0.0)
+    if (afterForward.mSpeed < 18.0 || afterForward.mX <= 0.0 || afterForward.mFuel >= 1.0)
     {
         std::cerr << "forward input did not build sufficient racing speed\n";
+        return 1;
+    }
+    for (int step = 0; step < 180; ++step)
+        hovercraft.Step(forward, 1.0 / 60.0);
+    if (!NearlyEqual(hovercraft.State().mSpeed, 36.0, 0.001))
+    {
+        std::cerr << "forward input did not reach the tuned maximum speed\n";
+        return 1;
+    }
+    for (int step = 0; step < 120; ++step)
+        hovercraft.Step(HovercraftInput(), 1.0 / 60.0);
+    if (hovercraft.State().mFuel <= afterForward.mFuel)
+    {
+        std::cerr << "fuel did not recover while coasting\n";
         return 1;
     }
 
@@ -33,18 +47,10 @@ int main()
     boost.mBoost = true;
     for (int step = 0; step < 60; ++step)
         boostedHovercraft.Step(boost, 1.0 / 60.0);
-    if (boostedHovercraft.State().mSpeed <= afterForward.mSpeed
-        || boostedHovercraft.State().mBoostEnergy >= 1.0)
+    if (!NearlyEqual(boostedHovercraft.State().mSpeed, afterForward.mSpeed, 0.001)
+        || boostedHovercraft.State().mBoosting)
     {
-        std::cerr << "boost did not increase speed and consume energy\n";
-        return 1;
-    }
-
-    for (int step = 0; step < 600; ++step)
-        boostedHovercraft.Step(HovercraftInput(), 1.0 / 60.0);
-    if (!NearlyEqual(boostedHovercraft.State().mBoostEnergy, 1.0, 0.0001))
-    {
-        std::cerr << "boost energy did not recharge\n";
+        std::cerr << "disabled boost changed hovercraft speed\n";
         return 1;
     }
 
@@ -54,6 +60,15 @@ int main()
     if (hovercraft.State().mHeading <= afterForward.mHeading)
     {
         std::cerr << "steering input did not change heading\n";
+        return 1;
+    }
+
+    HovercraftInput reverseFacing;
+    reverseFacing.mReverseFacing = true;
+    hovercraft.Step(reverseFacing, 1.0 / 60.0);
+    if (!hovercraft.State().mReverseFacing)
+    {
+        std::cerr << "reverse-facing input did not update craft state\n";
         return 1;
     }
 
@@ -95,19 +110,22 @@ int main()
     HovercraftInput jump;
     jump.mJump = true;
     double peakHeight = jumpingHovercraft.State().mHeight;
+    int airborneSteps = 0;
     bool descendedAfterPeak = false;
     bool landedWithRebound = false;
     for (int step = 0; step < 360; ++step)
     {
         jumpingHovercraft.Step(jump, 1.0 / 120.0);
         peakHeight = std::fmax(peakHeight, jumpingHovercraft.State().mHeight);
+        airborneSteps += jumpingHovercraft.State().mHeight > 1.22 ? 1 : 0;
         descendedAfterPeak = descendedAfterPeak
             || jumpingHovercraft.State().mVerticalSpeed < 0.0;
         landedWithRebound = landedWithRebound
             || (NearlyEqual(jumpingHovercraft.State().mHeight, 1.2, 0.0001)
                 && jumpingHovercraft.State().mVerticalSpeed > 0.0);
     }
-    if (peakHeight < 1.45 || peakHeight > 2.5 || !descendedAfterPeak || !landedWithRebound
+    if (peakHeight < 1.45 || peakHeight > 2.5 || airborneSteps < 60 || airborneSteps > 150
+        || !descendedAfterPeak || !landedWithRebound
         || !NearlyEqual(jumpingHovercraft.State().mHeight, 1.2, 0.01))
     {
         std::cerr << "jump did not launch once and return to hover height\n";

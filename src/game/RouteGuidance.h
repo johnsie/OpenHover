@@ -5,6 +5,8 @@
 #include "Hovercraft.h"
 #include "Race.h"
 
+double GetGateDirection(const HovercraftState& pState, const RaceGate& pGate);
+
 bool IsHeadingAwayFromGate(const HovercraftState& pState, const RaceGate& pGate,
                            double pDirectionThreshold = -0.25);
 

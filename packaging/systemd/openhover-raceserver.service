@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenHover authoritative race server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openhover
+Group=openhover
+ExecStart=/usr/bin/OpenHoverServer --port 9700
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/openhover
+
+[Install]
+WantedBy=multi-user.target

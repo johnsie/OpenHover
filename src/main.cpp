@@ -2,6 +2,7 @@
 #include <SDL.h>
 #include <SDL_opengl.h>
 
+#include "AudioFeedback.h"
 #include "BoostPad.h"
 #include "Championship.h"
 #include "Course.h"
@@ -10,6 +11,7 @@
 #include "Hovercraft.h"
 #include "InputRecording.h"
 #include "LapTiming.h"
+#include "Missile.h"
 #include "Race.h"
 #include "RaceMode.h"
 #include "RacePosition.h"
@@ -20,27 +22,147 @@
 #include "RouteGuidance.h"
 #include "SteeringAssist.h"
 #include "TrackDefinition.h"
+#include "TcpLobbyClient.h"
 #include "WallCollision.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace
 {
 const int kWindowWidth = 1280;
 const int kWindowHeight = 720;
-const int kRivalCount = 2;
+const int kRivalCount = 7;
 const double kPi = 3.14159265358979323846;
 
 enum class FrontScreen
 {
     Welcome,
+    Multiplayer,
+    HostRaceSetup,
     HowToPlay,
     Settings,
     LocalSetup,
     RaceSetup
 };
+
+struct LobbyRoomView
+{
+    int mId = 0;
+    std::string mName;
+    int mHostId = 0;
+    int mPlayerCount = 0;
+    int mPlayerCapacity = 0;
+    bool mRaceRunning = false;
+    int mRaceMode = 0;
+    int mTrackIndex = 0;
+    int mLapCount = 0;
+    int mRivalCount = 0;
+    bool mWeaponsAllowed = false;
+};
+
+std::vector<std::string> gLobbyPlayers;
+std::vector<LobbyRoomView> gLobbyRooms;
+std::vector<std::string> gLobbyChatMessages;
+std::string gLobbyChatInput;
+std::string gLobbyStatus = "CONNECTING TO SERVER";
+int gLobbySelectedRoom = -1;
+int gLobbyPlayerId = 0;
+int gHostSetupSelection = 0;
+int gHostRaceMode = 0;
+int gHostTrackIndex = 0;
+int gHostLapCount = 3;
+int gHostPlayerCapacity = 8;
+int gHostRivalCount = 0;
+bool gHostWeaponsAllowed = true;
+bool gHostCreatePending = false;
+
+std::vector<std::string> SplitLobbyField(const std::string& pText, char pDelimiter)
+{
+    std::vector<std::string> fields;
+    std::size_t start = 0;
+    while (start <= pText.size())
+    {
+        const std::size_t end = pText.find(pDelimiter, start);
+        fields.push_back(pText.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return fields;
+}
+
+void ParseLobbySnapshot(const std::string& pMessage)
+{
+    gLobbyPlayers.clear();
+    gLobbyRooms.clear();
+    const std::vector<std::string> entries = SplitLobbyField(pMessage, '|');
+    for (std::size_t index = 1; index < entries.size(); ++index)
+    {
+        const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
+        if (fields.size() == 3 && fields[0] == "P")
+            gLobbyPlayers.push_back(fields[2]);
+        else if (fields.size() == 12 && fields[0] == "R")
+        {
+            LobbyRoomView room;
+            room.mId = std::atoi(fields[1].c_str());
+            room.mName = fields[2];
+            room.mHostId = std::atoi(fields[3].c_str());
+            room.mPlayerCount = std::atoi(fields[4].c_str());
+            room.mPlayerCapacity = std::atoi(fields[5].c_str());
+            room.mRaceRunning = std::atoi(fields[6].c_str()) != 0;
+            room.mRaceMode = std::atoi(fields[7].c_str());
+            room.mTrackIndex = std::atoi(fields[8].c_str());
+            room.mLapCount = std::atoi(fields[9].c_str());
+            room.mRivalCount = std::atoi(fields[10].c_str());
+            room.mWeaponsAllowed = std::atoi(fields[11].c_str()) != 0;
+            gLobbyRooms.push_back(room);
+        }
+    }
+    if (gLobbyRooms.empty())
+        gLobbySelectedRoom = -1;
+    else if (gLobbySelectedRoom < 0 || gLobbySelectedRoom >= static_cast<int>(gLobbyRooms.size()))
+        gLobbySelectedRoom = 0;
+}
+
+const char* RaceModeSetupLabel(RaceMode pRaceMode)
+{
+    switch (pRaceMode)
+    {
+    case RaceMode::SingleRace:
+        return "SINGLE RACE RIVALS";
+    case RaceMode::TimeTrial:
+        return "TIME TRIAL SOLO";
+    case RaceMode::Practice:
+        return "PRACTICE OPEN DRIVE";
+    case RaceMode::Championship:
+        return "CHAMPIONSHIP SERIES";
+    }
+    return "SINGLE RACE RIVALS";
+}
+
+const char* RivalDifficultySetupLabel(RivalDifficulty pRivalDifficulty)
+{
+    switch (pRivalDifficulty)
+    {
+    case RivalDifficulty::Relaxed:
+        return "RELAXED SLOWER AI";
+    case RivalDifficulty::Standard:
+        return "STANDARD BALANCED";
+    case RivalDifficulty::Expert:
+        return "EXPERT FASTER AI";
+    }
+    return "STANDARD BALANCED";
+}
+
+bool IsPointInRect(int pX, int pY, int pLeft, int pTop, int pWidth, int pHeight)
+{
+    return pX >= pLeft && pX < pLeft + pWidth && pY >= pTop && pY < pTop + pHeight;
+}
 
 double ControllerAxis(Sint16 pValue)
 {
@@ -48,21 +170,29 @@ double ControllerAxis(Sint16 pValue)
     return std::fabs(normalized) < 0.15 ? 0.0 : normalized;
 }
 
-void BounceOffCourseWall(Hovercraft& pHovercraft, const Course& pCourse)
+bool BounceOffCourseWall(Hovercraft& pHovercraft, const Course& pCourse)
 {
     HovercraftState state = pHovercraft.State();
     if (ResolveCourseWallCollision(state, pCourse))
+    {
         pHovercraft.Reset(state);
+        return true;
+    }
+    return false;
 }
 
-void ApplyBoostPads(Hovercraft& pHovercraft, const std::vector<BoostPad>& pPads)
+bool ApplyBoostPads(Hovercraft& pHovercraft, const std::vector<BoostPad>& pPads)
 {
     HovercraftState state = pHovercraft.State();
+    bool boosted = false;
     for (const BoostPad& pad : pPads)
     {
         if (ApplyBoostPad(state, pad))
-            pHovercraft.Reset(state);
+            boosted = true;
     }
+    if (boosted)
+        pHovercraft.Reset(state);
+    return boosted;
 }
 
 void ApplyHazardZones(Hovercraft& pHovercraft, const std::vector<HazardZone>& pZones,
@@ -76,17 +206,46 @@ void ApplyHazardZones(Hovercraft& pHovercraft, const std::vector<HazardZone>& pZ
         pHovercraft.Reset(state);
 }
 
+bool ApplyMines(Hovercraft& pHovercraft, std::vector<Mine>& pMines)
+{
+    HovercraftState state = pHovercraft.State();
+    for (Mine& mine : pMines)
+    {
+        if (ApplyMine(state, mine))
+        {
+            pHovercraft.Reset(state);
+            return true;
+        }
+    }
+    return false;
+}
+
 void ApplyRaisedSections(Hovercraft& pHovercraft, const std::vector<RaisedSection>& pSections)
 {
     HovercraftState state = pHovercraft.State();
+    const double previousSurfaceHeight = state.mSurfaceHeight;
+    const double previousHeight = state.mHeight;
+    const double previousVerticalSpeed = state.mVerticalSpeed;
+    state.mSurfaceHeight = 0.0;
     for (const RaisedSection& section : pSections)
     {
+        if (LandOnRaisedSection(state, section))
+        {
+            if (state.mSurfaceHeight != previousSurfaceHeight || state.mHeight != previousHeight
+                || state.mVerticalSpeed != previousVerticalSpeed)
+            {
+                pHovercraft.Reset(state);
+            }
+            return;
+        }
         if (ResolveRaisedSectionCollision(state, section))
         {
             pHovercraft.Reset(state);
             return;
         }
     }
+    if (state.mSurfaceHeight != previousSurfaceHeight)
+        pHovercraft.Reset(state);
 }
 
 bool ShouldJumpRaisedSection(const HovercraftState& pState,
@@ -129,10 +288,10 @@ void SetChaseCamera(const HovercraftState& pState, double pDistance)
     const double forwardX = std::cos(pState.mHeading);
     const double forwardZ = std::sin(pState.mHeading);
     const double eyeX = pState.mX - forwardX * pDistance;
-    const double eyeY = 4.4 + pDistance * 0.11;
+    const double eyeY = 2.3 + pDistance * 0.09;
     const double eyeZ = pState.mY - forwardZ * pDistance;
     const double targetX = pState.mX + forwardX * pDistance * 0.8;
-    const double targetY = 0.7;
+    const double targetY = 1.55;
     const double targetZ = pState.mY + forwardZ * pDistance * 0.8;
     double viewX = targetX - eyeX;
     double viewY = targetY - eyeY;
@@ -199,9 +358,9 @@ GLuint CreateWallTexture()
             const bool panelSeam = x % 16 < 2 || y % 22 < 2;
             const bool warningBand = y >= 29 && y < 36;
             const int pixel = (y * textureSize + x) * 3;
-            pixels[pixel] = static_cast<unsigned char>(panelSeam ? 52 : (warningBand ? 214 : 134));
-            pixels[pixel + 1] = static_cast<unsigned char>(panelSeam ? 74 : (warningBand ? 178 : 166));
-            pixels[pixel + 2] = static_cast<unsigned char>(panelSeam ? 80 : (warningBand ? 72 : 178));
+            pixels[pixel] = static_cast<unsigned char>(panelSeam ? 26 : (warningBand ? 232 : 92));
+            pixels[pixel + 1] = static_cast<unsigned char>(panelSeam ? 32 : (warningBand ? 146 : 108));
+            pixels[pixel + 2] = static_cast<unsigned char>(panelSeam ? 36 : (warningBand ? 40 : 112));
         }
     }
 
@@ -221,7 +380,7 @@ void DrawCourseGrid(const HovercraftState& pState)
 {
     const int centerX = static_cast<int>(pState.mX / 16.0) * 16;
     const int centerZ = static_cast<int>(pState.mY / 16.0) * 16;
-    glColor3f(0.07f, 0.14f, 0.18f);
+    glColor3f(0.025f, 0.18f, 0.27f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
     glVertex3d(centerX - 96, -0.02, centerZ - 96);
@@ -230,7 +389,7 @@ void DrawCourseGrid(const HovercraftState& pState)
     glVertex3d(centerX - 96, -0.02, centerZ + 96);
     glEnd();
 
-    glColor3f(0.12f, 0.24f, 0.29f);
+    glColor3f(0.08f, 0.42f, 0.56f);
     glBegin(GL_LINES);
     for (int offset = -80; offset <= 80; offset += 16)
     {
@@ -240,13 +399,25 @@ void DrawCourseGrid(const HovercraftState& pState)
         glVertex3d(centerX + 80, 0.0, centerZ + offset);
     }
     glEnd();
+
+    glColor3f(0.18f, 0.62f, 0.72f);
+    glBegin(GL_LINES);
+    for (int offset = -88; offset <= 88; offset += 11)
+    {
+        const double wave = std::sin((centerX + offset) * 0.16) * 1.8;
+        glVertex3d(centerX + offset - 4.0, 0.012, centerZ + wave);
+        glVertex3d(centerX + offset + 4.0, 0.012, centerZ + wave);
+        glVertex3d(centerX + wave, 0.012, centerZ + offset - 4.0);
+        glVertex3d(centerX + wave, 0.012, centerZ + offset + 4.0);
+    }
+    glEnd();
 }
 
 void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
                      double pHalfWidth)
 {
     const double roadHeight = 0.35;
-    const double wallHeight = 1.9;
+    const double wallHeight = 5.4;
     const double directionX = pEndX - pStartX;
     const double directionZ = pEndZ - pStartZ;
     const double length = std::sqrt(directionX * directionX + directionZ * directionZ);
@@ -377,7 +548,7 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
     }
 
     const double roadHeight = 0.35;
-    const double wallHeight = 1.9;
+    const double wallHeight = 5.4;
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, pRoadTexture);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
@@ -548,52 +719,103 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
     glEnd();
 }
 
-void DrawLandmarkTower(double pX, double pZ, double pWidth, double pHeight,
-                       float pRed, float pGreen, float pBlue)
+void DrawCityBuilding(double pX, double pZ, double pWidth, double pDepth, double pHeight,
+                      float pRed, float pGreen, float pBlue)
 {
     const double halfWidth = pWidth * 0.5;
+    const double halfDepth = pDepth * 0.5;
     glColor3f(pRed, pGreen, pBlue);
     glBegin(GL_QUADS);
-    glVertex3d(pX - halfWidth, 0.0, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, 0.0, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfWidth);
-    glVertex3d(pX - halfWidth, pHeight, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, 0.0, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, 0.0, pZ + halfWidth);
-    glVertex3d(pX + halfWidth, pHeight, pZ + halfWidth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, pHeight, pZ + halfWidth);
-    glVertex3d(pX - halfWidth, pHeight, pZ + halfWidth);
-    glVertex3d(pX - halfWidth, pHeight, pZ - halfWidth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfWidth);
+    glVertex3d(pX - halfWidth, 0.0, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, 0.0, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, 0.0, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, 0.0, pZ + halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
+    glVertex3d(pX - halfWidth, pHeight, pZ + halfDepth);
+    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
+    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
+    glVertex3d(pX - halfWidth, pHeight, pZ + halfDepth);
+    glEnd();
+
+    glColor3f(0.72f, 0.86f, 0.74f);
+    glBegin(GL_LINES);
+    for (double height = 4.0; height < pHeight - 2.0; height += 5.0)
+    {
+        glVertex3d(pX - halfWidth - 0.02, height, pZ - halfDepth);
+        glVertex3d(pX + halfWidth + 0.02, height, pZ - halfDepth);
+    }
     glEnd();
 }
 
-void DrawTrackLandmarks(const std::vector<RaceGate>& pWaypoints)
+void DrawMountain(double pX, double pZ, double pRadius, double pHeight,
+                  float pRed, float pGreen, float pBlue)
 {
-    if (pWaypoints.empty())
-        return;
-    double centerX = 0.0;
-    double centerZ = 0.0;
-    for (const RaceGate& waypoint : pWaypoints)
+    glColor3f(pRed, pGreen, pBlue);
+    glBegin(GL_TRIANGLES);
+    glVertex3d(pX - pRadius, 0.0, pZ - pRadius);
+    glVertex3d(pX + pRadius, 0.0, pZ - pRadius);
+    glVertex3d(pX, pHeight, pZ);
+    glVertex3d(pX + pRadius, 0.0, pZ - pRadius);
+    glVertex3d(pX + pRadius, 0.0, pZ + pRadius);
+    glVertex3d(pX, pHeight, pZ);
+    glVertex3d(pX + pRadius, 0.0, pZ + pRadius);
+    glVertex3d(pX - pRadius, 0.0, pZ + pRadius);
+    glVertex3d(pX, pHeight, pZ);
+    glVertex3d(pX - pRadius, 0.0, pZ + pRadius);
+    glVertex3d(pX - pRadius, 0.0, pZ - pRadius);
+    glVertex3d(pX, pHeight, pZ);
+    glEnd();
+}
+
+void DrawIndustrialBeacon(double pX, double pZ, double pHeight)
+{
+    glColor3f(0.3f, 0.36f, 0.38f);
+    glBegin(GL_QUADS);
+    glVertex3d(pX - 0.9, 0.0, pZ - 0.9);
+    glVertex3d(pX + 0.9, 0.0, pZ - 0.9);
+    glVertex3d(pX + 0.32, pHeight, pZ - 0.32);
+    glVertex3d(pX - 0.32, pHeight, pZ - 0.32);
+    glVertex3d(pX + 0.9, 0.0, pZ + 0.9);
+    glVertex3d(pX - 0.9, 0.0, pZ + 0.9);
+    glVertex3d(pX - 0.32, pHeight, pZ + 0.32);
+    glVertex3d(pX + 0.32, pHeight, pZ + 0.32);
+    glEnd();
+    glColor3f(1.0f, 0.68f, 0.12f);
+    glBegin(GL_TRIANGLES);
+    glVertex3d(pX, pHeight + 2.2, pZ);
+    glVertex3d(pX - 0.65, pHeight, pZ);
+    glVertex3d(pX + 0.65, pHeight, pZ);
+    glEnd();
+}
+
+void DrawTrackEnvironment(const TrackDefinition& pTrack)
+{
+    if (pTrack.mId == "harbor-loop")
     {
-        centerX += waypoint.mX;
-        centerZ += waypoint.mY;
+        DrawCityBuilding(-220.0, 170.0, 24.0, 22.0, 42.0, 0.22f, 0.3f, 0.33f);
+        DrawCityBuilding(-185.0, 220.0, 16.0, 18.0, 27.0, 0.28f, 0.36f, 0.38f);
+        DrawCityBuilding(205.0, 160.0, 20.0, 24.0, 35.0, 0.18f, 0.28f, 0.32f);
+        DrawCityBuilding(240.0, 215.0, 28.0, 20.0, 48.0, 0.24f, 0.34f, 0.36f);
     }
-    centerX /= pWaypoints.size();
-    centerZ /= pWaypoints.size();
-    for (int index = 0; index < static_cast<int>(pWaypoints.size()); ++index)
+    else if (pTrack.mId == "glass-switchback")
     {
-        const RaceGate& waypoint = pWaypoints[index];
-        double outwardX = waypoint.mX - centerX;
-        double outwardZ = waypoint.mY - centerZ;
-        const double length = std::sqrt(outwardX * outwardX + outwardZ * outwardZ);
-        if (length == 0.0)
-            continue;
-        outwardX /= length;
-        outwardZ /= length;
-        DrawLandmarkTower(waypoint.mX + outwardX * 15.0, waypoint.mY + outwardZ * 15.0,
-                          3.5, 5.0 + (index % 3) * 2.5, 0.12f, 0.32f, 0.38f);
+        DrawMountain(-210.0, 250.0, 45.0, 48.0, 0.22f, 0.31f, 0.28f);
+        DrawMountain(235.0, 280.0, 58.0, 62.0, 0.3f, 0.38f, 0.32f);
+        DrawMountain(45.0, 360.0, 68.0, 70.0, 0.18f, 0.27f, 0.26f);
+    }
+    else
+    {
+        DrawIndustrialBeacon(-185.0, 30.0, 32.0);
+        DrawIndustrialBeacon(225.0, 42.0, 46.0);
+        DrawIndustrialBeacon(190.0, 205.0, 38.0);
+        DrawIndustrialBeacon(-145.0, 190.0, 42.0);
     }
 }
 
@@ -612,26 +834,55 @@ void DrawFinishZone(const std::vector<RaceGate>& pWaypoints, double pTrackHalfWi
     forwardZ /= length;
     const double sideX = -forwardZ;
     const double sideZ = forwardX;
-    const double halfWidth = pTrackHalfWidth * 0.86;
-    for (int band = 0; band < 4; ++band)
+    const double halfWidth = pTrackHalfWidth;
+    const int columns = 8;
+    const int rows = 4;
+    for (int row = 0; row < rows; ++row)
     {
-        const double start = -1.4 + band * 0.72;
-        const double end = start + 0.44;
-        if (band % 2 == 0)
-            glColor3f(0.96f, 0.7f, 0.16f);
-        else
-            glColor3f(0.18f, 0.88f, 0.92f);
-        glBegin(GL_QUADS);
-        glNormal3d(0.0, 1.0, 0.0);
-        glVertex3d(finish.mX + forwardX * start + sideX * halfWidth, 0.382,
-                   finish.mY + forwardZ * start + sideZ * halfWidth);
-        glVertex3d(finish.mX + forwardX * end + sideX * halfWidth, 0.382,
-                   finish.mY + forwardZ * end + sideZ * halfWidth);
-        glVertex3d(finish.mX + forwardX * end - sideX * halfWidth, 0.382,
-                   finish.mY + forwardZ * end - sideZ * halfWidth);
-        glVertex3d(finish.mX + forwardX * start - sideX * halfWidth, 0.382,
-                   finish.mY + forwardZ * start - sideZ * halfWidth);
-        glEnd();
+        const double start = -1.8 + row * 0.9;
+        const double end = start + 0.9;
+        for (int column = 0; column < columns; ++column)
+        {
+            const double left = -halfWidth + column * (halfWidth * 2.0 / columns);
+            const double right = left + halfWidth * 2.0 / columns;
+            const float color = (row + column) % 2 == 0 ? 0.94f : 0.04f;
+            glColor3f(color, color, color);
+            glBegin(GL_QUADS);
+            glNormal3d(0.0, 1.0, 0.0);
+            glVertex3d(finish.mX + forwardX * start + sideX * left, 0.4,
+                       finish.mY + forwardZ * start + sideZ * left);
+            glVertex3d(finish.mX + forwardX * end + sideX * left, 0.4,
+                       finish.mY + forwardZ * end + sideZ * left);
+            glVertex3d(finish.mX + forwardX * end + sideX * right, 0.4,
+                       finish.mY + forwardZ * end + sideZ * right);
+            glVertex3d(finish.mX + forwardX * start + sideX * right, 0.4,
+                       finish.mY + forwardZ * start + sideZ * right);
+            glEnd();
+        }
+    }
+    const double bannerBottom = 4.1;
+    const double bannerCellHeight = 0.5;
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int column = 0; column < columns; ++column)
+        {
+            const double left = -halfWidth + column * (halfWidth * 2.0 / columns);
+            const double right = left + halfWidth * 2.0 / columns;
+            const double bottom = bannerBottom + row * bannerCellHeight;
+            const double top = bottom + bannerCellHeight;
+            const float color = (row + column) % 2 == 0 ? 0.96f : 0.03f;
+            glColor3f(color, color, color);
+            glBegin(GL_QUADS);
+            glVertex3d(finish.mX + sideX * left - forwardX * 0.04, bottom,
+                       finish.mY + sideZ * left - forwardZ * 0.04);
+            glVertex3d(finish.mX + sideX * right - forwardX * 0.04, bottom,
+                       finish.mY + sideZ * right - forwardZ * 0.04);
+            glVertex3d(finish.mX + sideX * right - forwardX * 0.04, top,
+                       finish.mY + sideZ * right - forwardZ * 0.04);
+            glVertex3d(finish.mX + sideX * left - forwardX * 0.04, top,
+                       finish.mY + sideZ * left - forwardZ * 0.04);
+            glEnd();
+        }
     }
 }
 
@@ -652,6 +903,16 @@ void DrawGate(const RaceGate& pGate, double pDirectionX, double pDirectionZ, boo
     const double gateHalfWidth = pTrackHalfWidth;
     const double postHeight = 3.8;
     const double postHalfWidth = 0.22;
+    glBegin(GL_QUADS);
+    glVertex3d(pGate.mX - forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
+               pGate.mY - forwardZ * 0.28 - sideZ * gateHalfWidth);
+    glVertex3d(pGate.mX + forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
+               pGate.mY + forwardZ * 0.28 - sideZ * gateHalfWidth);
+    glVertex3d(pGate.mX + forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
+               pGate.mY + forwardZ * 0.28 + sideZ * gateHalfWidth);
+    glVertex3d(pGate.mX - forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
+               pGate.mY - forwardZ * 0.28 + sideZ * gateHalfWidth);
+    glEnd();
     for (int side = -1; side <= 1; side += 2)
     {
         const double postX = pGate.mX + sideX * gateHalfWidth * side;
@@ -683,6 +944,35 @@ void DrawGate(const RaceGate& pGate, double pDirectionX, double pDirectionZ, boo
     glLineWidth(1.0f);
 }
 
+void DrawCheckpointGates(const std::vector<RaceGate>& pWaypoints,
+                         const std::vector<RaceGate>& pCheckpoints,
+                         int pActiveCheckpoint, double pTrackHalfWidth)
+{
+    if (pWaypoints.size() < 2)
+        return;
+    for (int checkpointIndex = 0; checkpointIndex < static_cast<int>(pCheckpoints.size()); ++checkpointIndex)
+    {
+        const RaceGate& checkpoint = pCheckpoints[checkpointIndex];
+        int closestWaypoint = 0;
+        double closestDistanceSquared = -1.0;
+        for (int waypointIndex = 0; waypointIndex < static_cast<int>(pWaypoints.size()); ++waypointIndex)
+        {
+            const double deltaX = checkpoint.mX - pWaypoints[waypointIndex].mX;
+            const double deltaZ = checkpoint.mY - pWaypoints[waypointIndex].mY;
+            const double distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
+            if (closestDistanceSquared < 0.0 || distanceSquared < closestDistanceSquared)
+            {
+                closestDistanceSquared = distanceSquared;
+                closestWaypoint = waypointIndex;
+            }
+        }
+        const RaceGate& previous = pWaypoints[(closestWaypoint + pWaypoints.size() - 1)
+            % pWaypoints.size()];
+        DrawGate(checkpoint, checkpoint.mX - previous.mX, checkpoint.mY - previous.mY,
+                 checkpointIndex == pActiveCheckpoint, false, pTrackHalfWidth);
+    }
+}
+
 void DrawBoostPad(const BoostPad& pPad)
 {
     const double innerRadius = pPad.mRadius * 0.55;
@@ -703,48 +993,119 @@ void DrawBoostPad(const BoostPad& pPad)
     glEnd();
 }
 
+void DrawMine(const Mine& pMine)
+{
+    if (pMine.mTriggered)
+        return;
+    glColor3f(0.1f, 0.08f, 0.06f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3d(pMine.mX, 0.62, pMine.mY);
+    for (int degree = 0; degree <= 360; degree += 30)
+    {
+        const double angle = degree * kPi / 180.0;
+        glVertex3d(pMine.mX + std::cos(angle) * pMine.mRadius,
+                   0.45, pMine.mY + std::sin(angle) * pMine.mRadius);
+    }
+    glEnd();
+    glColor3f(0.95f, 0.18f, 0.06f);
+    glBegin(GL_TRIANGLES);
+    for (int spike = 0; spike < 8; ++spike)
+    {
+        const double angle = spike * kPi * 0.25;
+        glVertex3d(pMine.mX, 0.95, pMine.mY);
+        glVertex3d(pMine.mX + std::cos(angle - 0.2) * pMine.mRadius * 1.25,
+                   0.48, pMine.mY + std::sin(angle - 0.2) * pMine.mRadius * 1.25);
+        glVertex3d(pMine.mX + std::cos(angle + 0.2) * pMine.mRadius * 1.25,
+                   0.48, pMine.mY + std::sin(angle + 0.2) * pMine.mRadius * 1.25);
+    }
+    glEnd();
+}
+
 void DrawHazardZone(const HazardZone& pZone)
 {
-    glColor3f(0.92f, 0.22f, 0.08f);
+    const double waterHeight = 0.28;
+    glColor3f(0.03f, 0.22f, 0.34f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
-    glVertex3d(pZone.mX - pZone.mRadius, 0.37, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, 0.37, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, 0.37, pZone.mY + pZone.mRadius);
-    glVertex3d(pZone.mX - pZone.mRadius, 0.37, pZone.mY + pZone.mRadius);
+    glVertex3d(pZone.mX - pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
+    glVertex3d(pZone.mX + pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
+    glVertex3d(pZone.mX + pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
+    glVertex3d(pZone.mX - pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
     glEnd();
-    glColor3f(1.0f, 0.72f, 0.16f);
+    glColor3f(0.12f, 0.7f, 0.82f);
     glBegin(GL_LINE_LOOP);
-    glVertex3d(pZone.mX - pZone.mRadius, 0.38, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, 0.38, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, 0.38, pZone.mY + pZone.mRadius);
-    glVertex3d(pZone.mX - pZone.mRadius, 0.38, pZone.mY + pZone.mRadius);
+    glVertex3d(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
+    glVertex3d(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
+    glVertex3d(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
+    glVertex3d(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
+    glEnd();
+    glBegin(GL_LINES);
+    for (double offset = -pZone.mRadius + 0.5; offset < pZone.mRadius; offset += 1.0)
+    {
+        glVertex3d(pZone.mX + offset - 0.24, waterHeight + 0.012, pZone.mY);
+        glVertex3d(pZone.mX + offset + 0.24, waterHeight + 0.012, pZone.mY);
+    }
     glEnd();
 }
 
 void DrawRaisedSection(const RaisedSection& pSection)
 {
+    const double baseHeight = 0.36;
     const double deckHeight = pSection.mClearHeight - 0.1;
     glPushMatrix();
     glTranslated(pSection.mX, 0.0, pSection.mY);
     glRotated(-pSection.mHeading * 180.0 / kPi, 0.0, 1.0, 0.0);
-    glColor3f(0.12f, 0.16f, 0.2f);
+    glColor3f(0.94f, 0.76f, 0.1f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
     glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
     glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
     glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
     glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
-    glColor3f(0.84f, 0.36f, 0.08f);
-    glVertex3d(-pSection.mHalfLength, 0.38, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, 0.38, -pSection.mHalfWidth);
+    glColor3f(0.82f, 0.58f, 0.06f);
+    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
     glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
     glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, 0.38, pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, 0.38, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
     glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
     glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    glColor3f(0.72f, 0.48f, 0.04f);
+    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    glColor3f(0.52f, 0.34f, 0.025f);
+    glNormal3d(0.0, -1.0, 0.0);
+    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
     glEnd();
+    glColor3f(0.62f, 0.42f, 0.03f);
+    for (int end = -1; end <= 1; end += 2)
+    {
+        for (int side = -1; side <= 1; side += 2)
+        {
+            const double x = end * (pSection.mHalfLength - 0.28);
+            const double z = side * (pSection.mHalfWidth - 0.28);
+            glBegin(GL_QUADS);
+            glVertex3d(x - 0.18, baseHeight, z - 0.18);
+            glVertex3d(x + 0.18, baseHeight, z - 0.18);
+            glVertex3d(x + 0.18, deckHeight, z - 0.18);
+            glVertex3d(x - 0.18, deckHeight, z - 0.18);
+            glVertex3d(x + 0.18, baseHeight, z + 0.18);
+            glVertex3d(x - 0.18, baseHeight, z + 0.18);
+            glVertex3d(x - 0.18, deckHeight, z + 0.18);
+            glVertex3d(x + 0.18, deckHeight, z + 0.18);
+            glEnd();
+        }
+    }
     glColor3f(0.74f, 0.84f, 0.88f);
     glBegin(GL_LINES);
     for (double x = -pSection.mHalfLength + 0.35; x < pSection.mHalfLength; x += 0.7)
@@ -756,11 +1117,105 @@ void DrawRaisedSection(const RaisedSection& pSection)
     glPopMatrix();
 }
 
-void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = false,
-                    CraftClass pCraftClass = CraftClass::Balanced)
+void DrawEngineFlame(double pThrust, double pDuctZ, double pTime)
 {
+    const double thrust = std::fmax(0.0, std::fmin(1.0, pThrust));
+    if (thrust < 0.015)
+        return;
+    const double flicker = 0.88 + std::sin(pTime * 17.0 + pDuctZ * 5.0) * 0.12;
+    const double flameLength = (0.08 + thrust * 1.15) * flicker;
+
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    glShadeModel(GL_SMOOTH);
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(1.0f, 0.22f, 0.02f, 0.0f);
+    glVertex3d(-0.88 - flameLength, 0.34, pDuctZ);
+    for (int degree = 0; degree <= 360; degree += 30)
+    {
+        const double angle = degree * kPi / 180.0;
+        glColor4f(1.0f, 0.3f, 0.025f, static_cast<float>(0.78 * thrust));
+        glVertex3d(-0.88, 0.34 + std::sin(angle) * 0.24,
+                   pDuctZ + std::cos(angle) * 0.25);
+    }
+    glEnd();
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(1.0f, 0.72f, 0.15f, 0.0f);
+    glVertex3d(-0.9 - flameLength * 0.72, 0.34, pDuctZ);
+    for (int degree = 0; degree <= 360; degree += 30)
+    {
+        const double angle = degree * kPi / 180.0;
+        glColor4f(0.26f, 0.76f, 1.0f, static_cast<float>(0.95 * thrust));
+        glVertex3d(-0.9, 0.34 + std::sin(angle) * 0.12,
+                   pDuctZ + std::cos(angle) * 0.13);
+    }
+    glEnd();
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+void DrawCraftRaceNumber(int pNumber)
+{
+    static const bool segments[10][7] = {
+        {true, true, true, true, true, true, false},
+        {false, true, true, false, false, false, false},
+        {true, true, false, true, true, false, true},
+        {true, true, true, true, false, false, true},
+        {false, true, true, false, false, true, true},
+        {true, false, true, true, false, true, true},
+        {true, false, true, true, true, true, true},
+        {true, true, true, false, false, false, false},
+        {true, true, true, true, true, true, true},
+        {true, true, true, true, false, true, true}
+    };
+    const int number = pNumber >= 0 && pNumber <= 9 ? pNumber : 0;
+    const double centerX = -0.65;
+    const double centerZ = 0.0;
+    const double segmentCenters[7][2] = {
+        {0.3, 0.0}, {0.15, -0.18}, {-0.15, -0.18}, {-0.3, 0.0},
+        {-0.15, 0.18}, {0.15, 0.18}, {0.0, 0.0}
+    };
+
+    glDisable(GL_LIGHTING);
+    for (int layer = 0; layer < 2; ++layer)
+    {
+        glColor3f(layer == 0 ? 0.015f : 0.94f, layer == 0 ? 0.02f : 0.78f,
+                  layer == 0 ? 0.025f : 0.18f);
+        const double height = layer == 0 ? 0.172 : 0.18;
+        const double thickness = layer == 0 ? 0.055 : 0.035;
+        for (int segment = 0; segment < 7; ++segment)
+        {
+            if (!segments[number][segment])
+                continue;
+            const bool horizontal = segment == 0 || segment == 3 || segment == 6;
+            const double x = centerX + segmentCenters[segment][0];
+            const double z = centerZ + segmentCenters[segment][1];
+            const double halfX = horizontal ? thickness : 0.17;
+            const double halfZ = horizontal ? 0.17 : thickness;
+            glBegin(GL_QUADS);
+            glVertex3d(x - halfX, height, z - halfZ);
+            glVertex3d(x + halfX, height, z - halfZ);
+            glVertex3d(x + halfX, height, z + halfZ);
+            glVertex3d(x - halfX, height, z + halfZ);
+            glEnd();
+        }
+    }
+    glEnable(GL_LIGHTING);
+}
+
+void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = false,
+                    CraftClass pCraftClass = CraftClass::Balanced, int pRaceNumber = 1)
+{
+    glShadeModel(GL_SMOOTH);
     const double hoverOffset = std::fmax(0.0, pState.mHeight - 1.2);
     const double shadowScale = std::fmax(0.42, 1.0 - hoverOffset * 0.5);
+    const double craftScale = pRival || pGhost ? 1.0 : 1.12;
     const float shadowAlpha = static_cast<float>(std::fmax(0.1, 0.38 - hoverOffset * 0.14));
     glDisable(GL_LIGHTING);
     glEnable(GL_BLEND);
@@ -772,8 +1227,8 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     for (int degree = 0; degree <= 360; degree += 15)
     {
         const double angle = degree * kPi / 180.0;
-        glVertex3d(pState.mX + std::cos(angle) * 1.75 * shadowScale, 0.382,
-                   pState.mY + std::sin(angle) * 1.18 * shadowScale);
+        glVertex3d(pState.mX + std::cos(angle) * 1.75 * craftScale * shadowScale, 0.382,
+                   pState.mY + std::sin(angle) * 1.18 * craftScale * shadowScale);
     }
     glEnd();
     glDepthMask(GL_TRUE);
@@ -781,8 +1236,13 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     glEnable(GL_LIGHTING);
     glPushMatrix();
     glTranslated(pState.mX, pState.mHeight, pState.mY);
-    glRotated(-pState.mHeading * 180.0 / kPi, 0.0, 1.0, 0.0);
+    glRotated(-pState.mHeading * 180.0 / kPi + (pState.mReverseFacing ? 180.0 : 0.0),
+              0.0, 1.0, 0.0);
     glRotated(-std::sin(pState.mHeading - pState.mTravelHeading) * 14.0, 1.0, 0.0, 0.0);
+    const double lengthScale = pRival || pGhost ? craftScale : craftScale * 0.94;
+    const double heightScale = pRival || pGhost ? craftScale : craftScale * 1.28;
+    const double widthScale = pRival || pGhost ? craftScale : craftScale * 1.08;
+    glScaled(lengthScale, heightScale, widthScale);
     const double verticalPitch = pState.mVerticalSpeed >= 0.0
         ? std::fmin(13.0, pState.mVerticalSpeed * 1.7)
         : std::fmax(-22.0, pState.mVerticalSpeed * 3.0);
@@ -790,6 +1250,10 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     const float accentRed = pGhost ? 0.12f : (pRival ? 0.16f : 0.9f);
     const float accentGreen = pGhost ? 0.92f : (pRival ? 0.66f : 0.08f);
     const float accentBlue = pGhost ? 0.82f : (pRival ? 0.82f : 0.12f);
+    const GLfloat hullSpecular[] = {0.32f, 0.38f, 0.42f, 1.0f};
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, hullSpecular);
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 38.0f);
+    DrawCraftRaceNumber(pRaceNumber);
     glColor3f(0.06f, 0.075f, 0.09f);
     glBegin(GL_TRIANGLE_FAN);
     glNormal3d(0.0, -1.0, 0.0);
@@ -800,34 +1264,81 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
         glVertex3d(std::cos(angle) * 1.5, -0.1, std::sin(angle) * 1.02);
     }
     glEnd();
-    glColor3f(0.13f, 0.16f, 0.18f);
     glBegin(GL_QUAD_STRIP);
     for (int degree = 0; degree <= 360; degree += 15)
     {
         const double angle = degree * kPi / 180.0;
         const double skirtX = std::cos(angle) * 1.5;
         const double skirtZ = std::sin(angle) * 1.02;
+        const float sideLighting = static_cast<float>(0.5 + (std::cos(angle) + 1.0) * 0.18);
+        glColor3f(0.025f * sideLighting, 0.033f * sideLighting, 0.04f * sideLighting);
         glVertex3d(skirtX, -0.36, skirtZ);
+        glColor3f(0.15f * sideLighting, 0.18f * sideLighting, 0.2f * sideLighting);
         glVertex3d(skirtX, -0.1, skirtZ);
     }
     glEnd();
+    glBegin(GL_TRIANGLES);
+    glNormal3d(0.0, 1.0, 0.0);
     glColor3f(accentRed, accentGreen, accentBlue);
-    glBegin(GL_TRIANGLE_FAN);
-    glNormal3d(0.0, 1.0, 0.0);
-    glVertex3d(0.16, 0.02, 0.0);
-    for (int degree = 0; degree <= 360; degree += 15)
-    {
-        const double angle = degree * kPi / 180.0;
-        glVertex3d(0.16 + std::cos(angle) * 1.1, 0.02, std::sin(angle) * 0.7);
-    }
+    glVertex3d(1.42, 0.16, 0.0);
+    glColor3f(accentRed * 0.8f, accentGreen * 0.8f, accentBlue * 0.8f);
+    glVertex3d(0.48, 0.13, 0.72);
+    glColor3f(accentRed * 0.5f, accentGreen * 0.5f, accentBlue * 0.5f);
+    glVertex3d(-0.88, 0.08, 0.74);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    glVertex3d(1.42, 0.16, 0.0);
+    glColor3f(accentRed * 0.5f, accentGreen * 0.5f, accentBlue * 0.5f);
+    glVertex3d(-0.88, 0.08, 0.74);
+    glColor3f(accentRed * 0.28f, accentGreen * 0.28f, accentBlue * 0.28f);
+    glVertex3d(-1.22, 0.02, 0.34);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    glVertex3d(1.42, 0.16, 0.0);
+    glColor3f(accentRed * 0.28f, accentGreen * 0.28f, accentBlue * 0.28f);
+    glVertex3d(-1.22, 0.02, 0.34);
+    glColor3f(accentRed * 0.22f, accentGreen * 0.22f, accentBlue * 0.22f);
+    glVertex3d(-1.22, 0.02, -0.34);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    glVertex3d(1.42, 0.16, 0.0);
+    glColor3f(accentRed * 0.22f, accentGreen * 0.22f, accentBlue * 0.22f);
+    glVertex3d(-1.22, 0.02, -0.34);
+    glColor3f(accentRed * 0.5f, accentGreen * 0.5f, accentBlue * 0.5f);
+    glVertex3d(-0.88, 0.08, -0.74);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    glVertex3d(1.42, 0.16, 0.0);
+    glColor3f(accentRed * 0.5f, accentGreen * 0.5f, accentBlue * 0.5f);
+    glVertex3d(-0.88, 0.08, -0.74);
+    glColor3f(accentRed * 0.8f, accentGreen * 0.8f, accentBlue * 0.8f);
+    glVertex3d(0.48, 0.13, -0.72);
     glEnd();
-    glColor3f(0.88f, 0.92f, 0.94f);
+    glColor3f(0.11f, 0.14f, 0.16f);
+    glBegin(GL_QUADS);
+    glNormal3d(0.0, 0.4, 0.9);
+    glVertex3d(1.42, 0.16, 0.0);
+    glVertex3d(-0.88, 0.08, 0.74);
+    glVertex3d(-1.22, -0.12, 0.42);
+    glVertex3d(0.56, -0.18, 0.78);
+    glNormal3d(0.0, 0.4, -0.9);
+    glVertex3d(1.42, 0.16, 0.0);
+    glVertex3d(0.56, -0.18, -0.78);
+    glVertex3d(-1.22, -0.12, -0.42);
+    glVertex3d(-0.88, 0.08, -0.74);
+    glEnd();
+    glBegin(GL_TRIANGLES);
+    glColor3f(accentRed * 0.5f, accentGreen * 0.5f, accentBlue * 0.5f);
+    glVertex3d(1.08, 0.18, 0.0);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    glVertex3d(0.36, 0.17, 0.58);
+    glVertex3d(0.36, 0.17, -0.58);
+    glEnd();
     glBegin(GL_TRIANGLE_FAN);
     glNormal3d(0.0, 1.0, 0.0);
+    glColor3f(0.76f, 0.84f, 0.86f);
     glVertex3d(0.28, 0.06, 0.0);
     for (int degree = 0; degree <= 360; degree += 20)
     {
         const double angle = degree * kPi / 180.0;
+        const float panelShade = static_cast<float>(0.58 + (std::cos(angle) + 1.0) * 0.16);
+        glColor3f(0.82f * panelShade, 0.9f * panelShade, 0.92f * panelShade);
         glVertex3d(0.28 + std::cos(angle) * 0.68, 0.06, std::sin(angle) * 0.42);
     }
     glEnd();
@@ -857,18 +1368,36 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     glVertex3d(0.86, 0.16, 0.18);
     glVertex3d(0.86, 0.16, -0.18);
     glEnd();
-    glColor3f(0.05f, 0.1f, 0.13f);
-    glBegin(GL_QUADS);
-    glVertex3d(-0.08, 0.42, -0.14);
-    glVertex3d(0.18, 0.42, -0.14);
-    glVertex3d(0.18, 0.72, -0.14);
-    glVertex3d(-0.08, 0.72, -0.14);
-    glVertex3d(-0.08, 0.42, 0.14);
-    glVertex3d(0.18, 0.42, 0.14);
-    glVertex3d(0.18, 0.72, 0.14);
-    glVertex3d(-0.08, 0.72, 0.14);
+    glColor3f(0.035f, 0.05f, 0.06f);
+    glBegin(GL_TRIANGLES);
+    glVertex3d(-0.66, 0.2, 0.0);
+    glVertex3d(-0.42, 0.92, 0.0);
+    glVertex3d(0.46, 0.32, 0.0);
     glEnd();
-    glColor3f(0.76f, 0.82f, 0.84f);
+    glColor3f(accentRed, accentGreen, accentBlue);
+    for (int side = -1; side <= 1; side += 2)
+    {
+        glBegin(GL_TRIANGLES);
+        glVertex3d(0.92, 0.14, side * 0.38);
+        glVertex3d(1.28, 0.11, side * 0.86);
+        glVertex3d(0.2, 0.08, side * 0.72);
+        glEnd();
+    }
+    glColor3f(0.09f, 0.13f, 0.15f);
+    glBegin(GL_QUADS);
+    glVertex3d(-0.42, 0.18, -0.26);
+    glVertex3d(0.44, 0.18, -0.26);
+    glVertex3d(0.26, 0.42, -0.18);
+    glVertex3d(-0.24, 0.42, -0.18);
+    glVertex3d(-0.42, 0.18, 0.26);
+    glVertex3d(-0.24, 0.42, 0.18);
+    glVertex3d(0.26, 0.42, 0.18);
+    glVertex3d(0.44, 0.18, 0.26);
+    glEnd();
+    const GLfloat canopySpecular[] = {0.68f, 0.9f, 1.0f, 1.0f};
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, canopySpecular);
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 92.0f);
+    glColor3f(0.04f, 0.22f, 0.28f);
     for (int latitude = 0; latitude < 5; ++latitude)
     {
         const double lower = -kPi * 0.5 + latitude * kPi / 5.0;
@@ -877,22 +1406,24 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
         for (int longitude = 0; longitude <= 10; ++longitude)
         {
             const double angle = longitude * 2.0 * kPi / 10.0;
-            glVertex3d(0.12 + std::cos(angle) * std::cos(lower) * 0.22,
-                       0.92 + std::sin(lower) * 0.27,
-                       std::sin(angle) * std::cos(lower) * 0.22);
-            glVertex3d(0.12 + std::cos(angle) * std::cos(upper) * 0.22,
-                       0.92 + std::sin(upper) * 0.27,
-                       std::sin(angle) * std::cos(upper) * 0.22);
+            glVertex3d(0.06 + std::cos(angle) * std::cos(lower) * 0.34,
+                       0.52 + std::sin(lower) * 0.23,
+                       std::sin(angle) * std::cos(lower) * 0.26);
+            glVertex3d(0.06 + std::cos(angle) * std::cos(upper) * 0.34,
+                       0.52 + std::sin(upper) * 0.23,
+                       std::sin(angle) * std::cos(upper) * 0.26);
         }
         glEnd();
     }
-    glColor3f(0.025f, 0.08f, 0.12f);
+    glColor3f(0.72f, 0.78f, 0.76f);
     glBegin(GL_QUADS);
-    glVertex3d(0.35, 0.9, -0.17);
-    glVertex3d(0.35, 1.04, -0.17);
-    glVertex3d(0.35, 1.04, 0.17);
-    glVertex3d(0.35, 0.9, 0.17);
+    glVertex3d(0.43, 0.42, -0.18);
+    glVertex3d(0.56, 0.46, -0.14);
+    glVertex3d(0.56, 0.46, 0.14);
+    glVertex3d(0.43, 0.42, 0.18);
     glEnd();
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, hullSpecular);
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 38.0f);
     glColor3f(accentRed, accentGreen, accentBlue);
     for (int side = -1; side <= 1; side += 2)
     {
@@ -904,37 +1435,50 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     }
     for (int side = -1; side <= 1; side += 2)
     {
-        const double ductZ = side * 0.82;
+        const double ductZ = side * 0.8;
         glColor3f(accentRed, accentGreen, accentBlue);
         glBegin(GL_TRIANGLE_FAN);
-        glVertex3d(-0.72, 0.86, ductZ);
+        glVertex3d(-0.8, 0.34, ductZ);
         for (int degree = 0; degree <= 360; degree += 20)
         {
             const double angle = degree * kPi / 180.0;
-            glVertex3d(-0.72, 0.86 + std::sin(angle) * 0.42,
-                       ductZ + std::cos(angle) * 0.42);
+            glVertex3d(-0.8, 0.34 + std::sin(angle) * 0.3,
+                       ductZ + std::cos(angle) * 0.32);
         }
         glEnd();
         glColor3f(0.03f, 0.04f, 0.05f);
         glBegin(GL_TRIANGLE_FAN);
-        glVertex3d(-0.75, 0.86, ductZ);
+        glVertex3d(-0.83, 0.34, ductZ);
         for (int degree = 0; degree <= 360; degree += 20)
         {
             const double angle = degree * kPi / 180.0;
-            glVertex3d(-0.75, 0.86 + std::sin(angle) * 0.27,
-                       ductZ + std::cos(angle) * 0.27);
+            glVertex3d(-0.83, 0.34 + std::sin(angle) * 0.19,
+                       ductZ + std::cos(angle) * 0.21);
         }
         glEnd();
+        glDisable(GL_LIGHTING);
+        glColor3f(1.0f, 0.24f, 0.04f);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex3d(-0.86, 0.34, ductZ);
+        for (int degree = 0; degree <= 360; degree += 30)
+        {
+            const double angle = degree * kPi / 180.0;
+            glVertex3d(-0.87, 0.34 + std::sin(angle) * 0.1,
+                       ductZ + std::cos(angle) * 0.11);
+        }
+        glEnd();
+        glEnable(GL_LIGHTING);
         glColor3f(0.72f, 0.78f, 0.8f);
         glBegin(GL_LINES);
         for (int degree = 0; degree < 360; degree += 45)
         {
             const double angle = degree * kPi / 180.0;
-            glVertex3d(-0.77, 0.86, ductZ);
-            glVertex3d(-0.77, 0.86 + std::sin(angle) * 0.24,
-                       ductZ + std::cos(angle) * 0.24);
+            glVertex3d(-0.85, 0.34, ductZ);
+            glVertex3d(-0.85, 0.34 + std::sin(angle) * 0.17,
+                       ductZ + std::cos(angle) * 0.18);
         }
         glEnd();
+        DrawEngineFlame(pState.mEngineThrust, ductZ, SDL_GetTicks() * 0.001);
     }
     if (pCraftClass == CraftClass::Sprint)
     {
@@ -1038,15 +1582,16 @@ void DrawSetupOverlay(int pWidth, int pHeight)
     DrawPixelText("RACE STARTING", 24, 92, 3);
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText("A D STEER  S BRAKE  UP JUMP", 24, 120, 2);
-    DrawPixelText("SHIFT ACCEL  CTRL BOOST", 24, 138, 2);
+    DrawPixelText("SHIFT ACCEL  CTRL FIRE", 24, 138, 2);
 }
 
 void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
                        bool pChampionship, const char* pChampionshipPoints,
-                       double pPlayerElapsedSeconds, int pWidth, int pHeight)
+                       double pPlayerElapsedSeconds, const LapTiming& pLapTiming,
+                       int pSelection, int pWidth, int pHeight)
 {
     const int panelWidth = 420;
-    const int panelHeight = pChampionship ? 220 : 180;
+    const int panelHeight = pChampionship ? 310 : 268;
     const int left = (pWidth - panelWidth) / 2;
     const int top = (pHeight - panelHeight) / 2 - 10;
     glColor3f(0.02f, 0.05f, 0.08f);
@@ -1076,16 +1621,75 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
     char raceTime[32];
     std::snprintf(raceTime, sizeof(raceTime), "TIME %d M %d S", elapsedSeconds / 60, elapsedSeconds % 60);
     DrawPixelText(raceTime, left + 110, top + 102, 3);
+    const int lastLapSeconds = static_cast<int>(pLapTiming.mLastSeconds);
+    const int bestLapSeconds = static_cast<int>(pLapTiming.mBestSeconds);
+    char lastLap[32];
+    char bestLap[32];
+    std::snprintf(lastLap, sizeof(lastLap), "LAST %d M %d S", lastLapSeconds / 60, lastLapSeconds % 60);
+    std::snprintf(bestLap, sizeof(bestLap), "BEST %d M %d S", bestLapSeconds / 60, bestLapSeconds % 60);
+    DrawPixelText(lastLap, left + 110, top + 132, 2);
+    DrawPixelText(bestLap, left + 110, top + 154, 2);
     if (pChampionship)
     {
         glColor3f(0.2f, 0.9f, 1.0f);
-        DrawPixelText("SERIES POINTS", left + 122, top + 132, 3);
+        DrawPixelText("SERIES POINTS", left + 122, top + 180, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText(pChampionshipPoints, left + 42, top + 162, 2);
+        DrawPixelText(pChampionshipPoints, left + 42, top + 210, 2);
     }
-    glColor3f(1.0f, 0.78f, 0.12f);
-    DrawPixelText(pChampionship ? "PRESS R NEXT" : "PRESS R RESTART",
-                  pChampionship ? left + 102 : left + 78, pChampionship ? top + 188 : top + 138, 3);
+    const int actionsTop = top + (pChampionship ? 248 : 198);
+    for (int action = 0; action < 2; ++action)
+    {
+        const int actionLeft = left + 24 + action * 194;
+        const bool selected = action == pSelection;
+        glColor3f(selected ? 0.12f : 0.06f, selected ? 0.52f : 0.18f,
+                  selected ? 0.62f : 0.24f);
+        glBegin(GL_QUADS);
+        glVertex2i(actionLeft, actionsTop);
+        glVertex2i(actionLeft + 178, actionsTop);
+        glVertex2i(actionLeft + 178, actionsTop + 38);
+        glVertex2i(actionLeft, actionsTop + 38);
+        glEnd();
+    }
+    glColor3f(pSelection == 0 ? 1.0f : 0.82f, pSelection == 0 ? 0.82f : 0.9f,
+              pSelection == 0 ? 0.22f : 0.92f);
+    DrawPixelText(pChampionship ? "NEXT EVENT" : "RESTART", left + 42, actionsTop + 12, 2);
+    glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.82f : 0.9f,
+              pSelection == 1 ? 0.22f : 0.92f);
+    DrawPixelText("MAIN MENU", left + 242, actionsTop + 12, 2);
+}
+
+void DrawPauseOverlay(int pSelection, int pWidth, int pHeight)
+{
+    const int panelWidth = 340;
+    const int panelHeight = 236;
+    const int left = (pWidth - panelWidth) / 2;
+    const int top = (pHeight - panelHeight) / 2;
+    glColor4f(0.01f, 0.025f, 0.04f, 0.9f);
+    glBegin(GL_QUADS);
+    glVertex2i(left, top);
+    glVertex2i(left + panelWidth, top);
+    glVertex2i(left + panelWidth, top + panelHeight);
+    glVertex2i(left, top + panelHeight);
+    glEnd();
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText("PAUSED", left + 104, top + 24, 4);
+    const char* actions[] = {"RESUME", "MAIN MENU", "EXIT OPENHOVER"};
+    for (int action = 0; action < 3; ++action)
+    {
+        const int actionTop = top + 82 + action * 44;
+        const bool selected = action == pSelection;
+        glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
+                  selected ? 0.62f : 0.14f);
+        glBegin(GL_QUADS);
+        glVertex2i(left + 24, actionTop);
+        glVertex2i(left + panelWidth - 24, actionTop);
+        glVertex2i(left + panelWidth - 24, actionTop + 34);
+        glVertex2i(left + 24, actionTop + 34);
+        glEnd();
+        glColor3f(selected ? 1.0f : 0.82f, selected ? 0.82f : 0.9f,
+                  selected ? 0.22f : 0.92f);
+        DrawPixelText(actions[action], left + 66, actionTop + 10, 2);
+    }
 }
 
 void DrawMenuHovercraft(int pCenterX, int pCenterY)
@@ -1137,8 +1741,107 @@ void DrawMenuHovercraft(int pCenterX, int pCenterY)
     glEnd();
 }
 
+void DrawMissile(const Missile& pMissile)
+{
+    if (!pMissile.Active())
+        return;
+    const HovercraftState& state = pMissile.State();
+    glPushMatrix();
+    glTranslated(state.mX, state.mHeight, state.mY);
+    glRotated(-state.mTravelHeading * 180.0 / kPi, 0.0, 1.0, 0.0);
+
+    glColor3f(0.16f, 0.68f, 0.58f);
+    glBegin(GL_QUAD_STRIP);
+    for (int degree = 0; degree <= 360; degree += 45)
+    {
+        const double angle = degree * kPi / 180.0;
+        const double vertical = std::sin(angle) * 0.13;
+        const double sideways = std::cos(angle) * 0.13;
+        glVertex3d(-0.4, vertical, sideways);
+        glVertex3d(0.3, vertical, sideways);
+    }
+    glEnd();
+
+    glColor3f(0.7f, 0.88f, 0.78f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3d(0.62, 0.0, 0.0);
+    for (int degree = 0; degree <= 360; degree += 45)
+    {
+        const double angle = degree * kPi / 180.0;
+        glVertex3d(0.3, std::sin(angle) * 0.13, std::cos(angle) * 0.13);
+    }
+    glEnd();
+
+    glColor3f(0.09f, 0.13f, 0.14f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3d(-0.43, 0.0, 0.0);
+    for (int degree = 0; degree <= 360; degree += 45)
+    {
+        const double angle = degree * kPi / 180.0;
+        glVertex3d(-0.4, std::sin(angle) * 0.09, std::cos(angle) * 0.09);
+    }
+    glEnd();
+
+    glColor3f(0.92f, 0.3f, 0.16f);
+    for (int fin = 0; fin < 4; ++fin)
+    {
+        const double angle = fin * kPi * 0.5;
+        const double vertical = std::sin(angle);
+        const double sideways = std::cos(angle);
+        glBegin(GL_TRIANGLES);
+        glVertex3d(-0.28, vertical * 0.11, sideways * 0.11);
+        glVertex3d(-0.52, vertical * 0.34, sideways * 0.34);
+        glVertex3d(0.08, vertical * 0.12, sideways * 0.12);
+        glEnd();
+    }
+
+    const double exhaustLength = 0.22 + std::fmod(state.mSpeed * 0.013, 0.16);
+    glDisable(GL_LIGHTING);
+    glColor3f(1.0f, 0.7f, 0.12f);
+    glBegin(GL_TRIANGLES);
+    glVertex3d(-0.4, -0.08, 0.0);
+    glVertex3d(-0.4, 0.08, 0.0);
+    glVertex3d(-0.4 - exhaustLength, 0.0, 0.0);
+    glEnd();
+    glEnable(GL_LIGHTING);
+    glPopMatrix();
+}
+
+void DrawLobbyPanel(int pLeft, int pTop, int pWidth, int pHeight)
+{
+    glColor3f(0.105f, 0.105f, 0.13f);
+    glBegin(GL_QUADS);
+    glVertex2i(pLeft, pTop);
+    glVertex2i(pLeft + pWidth, pTop);
+    glVertex2i(pLeft + pWidth, pTop + pHeight);
+    glVertex2i(pLeft, pTop + pHeight);
+    glEnd();
+    glColor3f(0.29f, 0.29f, 0.35f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2i(pLeft, pTop);
+    glVertex2i(pLeft + pWidth, pTop);
+    glVertex2i(pLeft + pWidth, pTop + pHeight);
+    glVertex2i(pLeft, pTop + pHeight);
+    glEnd();
+}
+
+void DrawLobbyButton(const char* pLabel, int pLeft, int pTop, int pWidth, bool pPrimary)
+{
+    glColor3f(pPrimary ? 0.68f : 0.24f, pPrimary ? 0.14f : 0.24f, pPrimary ? 0.21f : 0.31f);
+    glBegin(GL_QUADS);
+    glVertex2i(pLeft, pTop);
+    glVertex2i(pLeft + pWidth, pTop);
+    glVertex2i(pLeft + pWidth, pTop + 42);
+    glVertex2i(pLeft, pTop + 42);
+    glEnd();
+    glColor3f(0.92f, 0.88f, 0.92f);
+    DrawPixelText(pLabel, pLeft + 18, pTop + 13, 2);
+}
+
 void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSetting,
-                     int pTrackIndex, int pLaps, bool pWeaponsAllowed, int pWidth, int pHeight)
+                     bool pAudioEnabled, int pTrackIndex, int pLaps, int pRivalCount,
+                     RivalDifficulty pRivalDifficulty, RaceMode pRaceMode, bool pWeaponsAllowed,
+                     int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
     glDisable(GL_FOG);
@@ -1180,12 +1883,12 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         DrawPixelText("ORIGINAL HOVER RACING", 64, 132, 3);
         DrawMenuHovercraft(pWidth / 4, pHeight / 2 + 125);
 
-        const char* options[] = {"PLAY LOCAL GAME", "HOW TO PLAY", "SETTINGS", "QUIT"};
+        const char* options[] = {"PLAY LOCAL GAME", "MULTIPLAYER", "HOW TO PLAY", "SETTINGS", "QUIT"};
         const int panelLeft = pWidth / 2 - 200;
-        const int panelTop = 175;
-        for (int option = 0; option < 4; ++option)
+        const int panelTop = 145;
+        for (int option = 0; option < 5; ++option)
         {
-            const int top = panelTop + option * 86;
+            const int top = panelTop + option * 72;
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
@@ -1200,8 +1903,257 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             DrawPixelText(options[option], panelLeft + 68, top + 20, 3);
         }
         glColor3f(0.72f, 0.82f, 0.84f);
-        DrawPixelText("UP DOWN TO SELECT", pWidth / 2 - 132, pHeight - 92, 3);
-        DrawPixelText("ENTER TO CONFIRM", pWidth / 2 - 120, pHeight - 62, 3);
+        DrawPixelText("UP DOWN TO SELECT", pWidth / 2 - 132, pHeight - 82, 3);
+        DrawPixelText("ENTER TO CONFIRM", pWidth / 2 - 120, pHeight - 52, 3);
+    }
+    else if (pScreen == FrontScreen::Multiplayer)
+    {
+        glColor3f(0.075f, 0.075f, 0.095f);
+        glBegin(GL_QUADS);
+        glVertex2i(0, 0);
+        glVertex2i(pWidth, 0);
+        glVertex2i(pWidth, pHeight);
+        glVertex2i(0, pHeight);
+        glEnd();
+        const int margin = 18;
+        const int gap = 12;
+        const int top = 16;
+        const int leftWidth = pWidth * 29 / 100;
+        const int actionWidth = pWidth * 15 / 100;
+        const int detailWidth = pWidth - margin * 2 - gap * 2 - leftWidth - actionWidth;
+        const int topHeight = pHeight * 42 / 100;
+        const int bottomTop = top + topHeight + gap;
+        const int bottomHeight = pHeight - bottomTop - margin;
+        const int detailLeft = margin + leftWidth + gap;
+        const int actionLeft = detailLeft + detailWidth + gap;
+
+        DrawLobbyPanel(margin, top, leftWidth, topHeight);
+        DrawLobbyPanel(detailLeft, top, detailWidth, topHeight);
+        DrawLobbyPanel(actionLeft, top, actionWidth, topHeight);
+        DrawLobbyPanel(margin, bottomTop, leftWidth, bottomHeight);
+        DrawLobbyPanel(detailLeft, bottomTop, detailWidth + gap + actionWidth, bottomHeight);
+
+        glColor3f(0.95f, 0.35f, 0.4f);
+        DrawPixelText("GAME LIST", margin + 16, top + 18, 2);
+        DrawPixelText("GAME DETAILS", detailLeft + 16, top + 18, 2);
+        DrawPixelText("USERS LIST (2)", margin + 16, bottomTop + 18, 2);
+        DrawPixelText("CHAT", detailLeft + 16, bottomTop + 18, 2);
+
+        glColor3f(0.22f, 0.22f, 0.27f);
+        glBegin(GL_LINES);
+        glVertex2i(margin + 16, top + 44);
+        glVertex2i(margin + leftWidth - 16, top + 44);
+        glVertex2i(detailLeft + 16, top + 44);
+        glVertex2i(detailLeft + detailWidth - 16, top + 44);
+        glVertex2i(margin + 16, bottomTop + 44);
+        glVertex2i(margin + leftWidth - 16, bottomTop + 44);
+        glVertex2i(detailLeft + 16, bottomTop + 44);
+        glVertex2i(pWidth - margin - 16, bottomTop + 44);
+        glEnd();
+
+        glColor3f(0.065f, 0.065f, 0.085f);
+        glBegin(GL_QUADS);
+        glVertex2i(margin + 16, top + 54);
+        glVertex2i(margin + leftWidth - 16, top + 54);
+        glVertex2i(margin + leftWidth - 16, top + topHeight - 16);
+        glVertex2i(margin + 16, top + topHeight - 16);
+        glVertex2i(margin + 16, bottomTop + 56);
+        glVertex2i(margin + leftWidth - 16, bottomTop + 56);
+        glVertex2i(margin + leftWidth - 16, bottomTop + bottomHeight - 16);
+        glVertex2i(margin + 16, bottomTop + bottomHeight - 16);
+        glEnd();
+        if (gLobbyRooms.empty())
+        {
+            glColor3f(0.62f, 0.62f, 0.68f);
+            DrawPixelText("NO OPEN RACES - HOST", margin + 26, top + 70, 2);
+            DrawPixelText("ONE TO GET STARTED", margin + 26, top + 94, 2);
+        }
+        else
+        {
+            for (int roomIndex = 0; roomIndex < static_cast<int>(gLobbyRooms.size()); ++roomIndex)
+            {
+                const int rowTop = top + 58 + roomIndex * 38;
+                if (rowTop + 30 >= top + topHeight - 16)
+                    break;
+                const LobbyRoomView& room = gLobbyRooms[roomIndex];
+                glColor3f(roomIndex == gLobbySelectedRoom ? 0.18f : 0.09f,
+                          roomIndex == gLobbySelectedRoom ? 0.36f : 0.09f,
+                          roomIndex == gLobbySelectedRoom ? 0.42f : 0.12f);
+                glBegin(GL_QUADS);
+                glVertex2i(margin + 20, rowTop);
+                glVertex2i(margin + leftWidth - 20, rowTop);
+                glVertex2i(margin + leftWidth - 20, rowTop + 30);
+                glVertex2i(margin + 20, rowTop + 30);
+                glEnd();
+                glColor3f(0.9f, 0.9f, 0.94f);
+                DrawPixelText(room.mName.c_str(), margin + 28, rowTop + 9, 2);
+            }
+        }
+        for (int playerIndex = 0; playerIndex < static_cast<int>(gLobbyPlayers.size()); ++playerIndex)
+        {
+            const int playerTop = bottomTop + 74 + playerIndex * 24;
+            if (playerTop + 16 >= bottomTop + bottomHeight - 16)
+                break;
+            glColor3f(playerIndex == 0 ? 0.95f : 0.76f, playerIndex == 0 ? 0.35f : 0.76f,
+                      playerIndex == 0 ? 0.4f : 0.82f);
+            DrawPixelText(gLobbyPlayers[playerIndex].c_str(), margin + 26, playerTop, 2);
+        }
+
+        const int previewLeft = detailLeft + 18;
+        const int previewTop = top + 56;
+        const int previewSize = std::min(detailWidth * 34 / 100, topHeight - 78);
+        glColor3f(0.06f, 0.06f, 0.08f);
+        glBegin(GL_QUADS);
+        glVertex2i(previewLeft, previewTop);
+        glVertex2i(previewLeft + previewSize, previewTop);
+        glVertex2i(previewLeft + previewSize, previewTop + previewSize);
+        glVertex2i(previewLeft, previewTop + previewSize);
+        glEnd();
+        glColor3f(0.5f, 0.5f, 0.58f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(previewLeft, previewTop);
+        glVertex2i(previewLeft + previewSize, previewTop);
+        glVertex2i(previewLeft + previewSize, previewTop + previewSize);
+        glVertex2i(previewLeft, previewTop + previewSize);
+        glEnd();
+        DrawPixelText("PREVIEW UNAVAILABLE", previewLeft + 10, previewTop + previewSize / 2, 2);
+        glColor3f(0.66f, 0.66f, 0.73f);
+        if (gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
+        {
+            const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
+            const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
+            const int validTrackIndex = room.mTrackIndex >= 0 && room.mTrackIndex < 3 ? room.mTrackIndex : 0;
+            const std::string players = std::to_string(room.mPlayerCount) + " OF "
+                + std::to_string(room.mPlayerCapacity) + " PLAYERS";
+            DrawPixelText(room.mName.c_str(), previewLeft + previewSize + 16, previewTop + 4, 2);
+            DrawPixelText(players.c_str(), previewLeft + previewSize + 16, previewTop + 28, 2);
+            DrawPixelText(trackNames[validTrackIndex], previewLeft + previewSize + 16, previewTop + 52, 2);
+            const std::string settings = std::to_string(room.mLapCount) + " LAPS  "
+                + std::to_string(room.mRivalCount) + " RIVALS  "
+                + (room.mWeaponsAllowed ? "WEAPONS ON" : "WEAPONS OFF");
+            DrawPixelText(settings.c_str(), previewLeft + previewSize + 16, previewTop + 76, 2);
+            DrawPixelText(room.mRaceRunning ? "RACE IN PROGRESS" : "WAITING FOR HOST",
+                          previewLeft + previewSize + 16, previewTop + 100, 2);
+        }
+        else
+        {
+            DrawPixelText("SELECT A RACE IN THE LIST", previewLeft + previewSize + 16, previewTop + 4, 2);
+            DrawPixelText("TO SEE ITS TRACK LAPS", previewLeft + previewSize + 16, previewTop + 28, 2);
+            DrawPixelText("WEAPONS AND PLAYERS", previewLeft + previewSize + 16, previewTop + 52, 2);
+        }
+
+        const bool selectedRoomIsHosted = gLobbySelectedRoom >= 0
+            && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
+            && gLobbyRooms[gLobbySelectedRoom].mHostId == gLobbyPlayerId;
+        DrawLobbyButton(selectedRoomIsHosted ? "START RACE" : "JOIN GAME",
+                        actionLeft + 16, top + 16, actionWidth - 32, true);
+        DrawLobbyButton("HOST RACE", actionLeft + 16, top + 72, actionWidth - 32, false);
+        glColor3f(0.22f, 0.22f, 0.27f);
+        glBegin(GL_LINES);
+        glVertex2i(actionLeft + 16, top + 132);
+        glVertex2i(actionLeft + actionWidth - 16, top + 132);
+        glEnd();
+        glColor3f(0.95f, 0.35f, 0.4f);
+        DrawPixelText(gLobbyStatus.c_str(), actionLeft + 16, top + 158, 2);
+        DrawLobbyButton("BACK TO MENU", actionLeft + 16, top + topHeight - 58, actionWidth - 32, false);
+
+        const int chatLeft = detailLeft + 16;
+        const int chatTop = bottomTop + 56;
+        const int chatWidth = detailWidth + gap + actionWidth - 32;
+        const int inputTop = bottomTop + bottomHeight - 46;
+        glColor3f(0.08f, 0.08f, 0.1f);
+        glBegin(GL_QUADS);
+        glVertex2i(chatLeft, chatTop);
+        glVertex2i(chatLeft + chatWidth, chatTop);
+        glVertex2i(chatLeft + chatWidth, inputTop - 10);
+        glVertex2i(chatLeft, inputTop - 10);
+        glVertex2i(chatLeft, inputTop);
+        glVertex2i(chatLeft + chatWidth - 86, inputTop);
+        glVertex2i(chatLeft + chatWidth - 86, inputTop + 32);
+        glVertex2i(chatLeft, inputTop + 32);
+        glEnd();
+        glColor3f(0.3f, 0.3f, 0.36f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(chatLeft, chatTop);
+        glVertex2i(chatLeft + chatWidth, chatTop);
+        glVertex2i(chatLeft + chatWidth, inputTop - 10);
+        glVertex2i(chatLeft, inputTop - 10);
+        glEnd();
+        const int firstMessage = std::max(0, static_cast<int>(gLobbyChatMessages.size()) - 8);
+        glColor3f(0.76f, 0.76f, 0.82f);
+        for (int messageIndex = firstMessage; messageIndex < static_cast<int>(gLobbyChatMessages.size()); ++messageIndex)
+            DrawPixelText(gLobbyChatMessages[messageIndex].c_str(), chatLeft + 12,
+                          chatTop + 12 + (messageIndex - firstMessage) * 22, 2);
+        glColor3f(0.62f, 0.62f, 0.68f);
+        DrawPixelText(gLobbyChatInput.c_str(), chatLeft + 12, inputTop + 9, 2);
+        DrawLobbyButton("SEND", chatLeft + chatWidth - 76, inputTop - 5, 76, true);
+    }
+    else if (pScreen == FrontScreen::HostRaceSetup)
+    {
+        const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
+        const char* modeNames[] = {"SINGLE RACE", "TIME TRIAL", "PRACTICE", "CHAMPIONSHIP"};
+        const char* labels[] = {"MODE", "TRACK", "LAPS", "MAX PLAYERS", "RIVALS", "WEAPONS", "HOST RACE", "BACK"};
+        glColor3f(0.075f, 0.075f, 0.095f);
+        glBegin(GL_QUADS);
+        glVertex2i(0, 0);
+        glVertex2i(pWidth, 0);
+        glVertex2i(pWidth, pHeight);
+        glVertex2i(0, pHeight);
+        glEnd();
+        const int panelLeft = pWidth / 2 - 280;
+        const int panelTop = 72;
+        glColor3f(0.105f, 0.105f, 0.13f);
+        glBegin(GL_QUADS);
+        glVertex2i(panelLeft, panelTop);
+        glVertex2i(panelLeft + 560, panelTop);
+        glVertex2i(panelLeft + 560, panelTop + 492);
+        glVertex2i(panelLeft, panelTop + 492);
+        glEnd();
+        glColor3f(0.29f, 0.29f, 0.35f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(panelLeft, panelTop);
+        glVertex2i(panelLeft + 560, panelTop);
+        glVertex2i(panelLeft + 560, panelTop + 492);
+        glVertex2i(panelLeft, panelTop + 492);
+        glEnd();
+        glColor3f(0.95f, 0.35f, 0.4f);
+        DrawPixelText("HOST RACE", panelLeft + 190, panelTop + 24, 5);
+        for (int option = 0; option < 8; ++option)
+        {
+            const int rowTop = panelTop + 82 + option * 46;
+            const bool selected = option == pSelection;
+            glColor3f(selected ? 0.18f : 0.08f, selected ? 0.38f : 0.08f,
+                      selected ? 0.44f : 0.1f);
+            glBegin(GL_QUADS);
+            glVertex2i(panelLeft + 18, rowTop);
+            glVertex2i(panelLeft + 542, rowTop);
+            glVertex2i(panelLeft + 542, rowTop + 36);
+            glVertex2i(panelLeft + 18, rowTop + 36);
+            glEnd();
+            glColor3f(selected ? 1.0f : 0.76f, selected ? 0.82f : 0.76f,
+                      selected ? 0.22f : 0.82f);
+            DrawPixelText(labels[option], panelLeft + 36, rowTop + 10, 2);
+            std::string value;
+            if (option == 0)
+                value = modeNames[gHostRaceMode];
+            else if (option == 1)
+                value = trackNames[gHostTrackIndex];
+            else if (option == 2)
+                value = std::to_string(gHostLapCount);
+            else if (option == 3)
+                value = std::to_string(gHostPlayerCapacity);
+            else if (option == 4)
+                value = std::to_string(gHostRivalCount);
+            else if (option == 5)
+                value = gHostWeaponsAllowed ? "ALLOWED" : "OFF";
+            else if (option == 6)
+                value = "CREATE ROOM";
+            else
+                value = "RETURN TO LOBBY";
+            DrawPixelText(value.c_str(), panelLeft + 300, rowTop + 10, 2);
+        }
+        glColor3f(0.76f, 0.76f, 0.82f);
+        DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", panelLeft + 76, panelTop + 454, 2);
     }
     else if (pScreen == FrontScreen::HowToPlay)
     {
@@ -1209,10 +2161,10 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         DrawPixelText("HOW TO PLAY", pWidth / 2 - 165, 70, 5);
         glColor3f(0.82f, 0.9f, 0.92f);
         DrawPixelText("SHIFT ACCEL", pWidth / 2 - 98, 190, 3);
-        DrawPixelText("CTRL BOOST", pWidth / 2 - 90, 230, 3);
         DrawPixelText("A D STEER", pWidth / 2 - 72, 270, 3);
         DrawPixelText("S BRAKE", pWidth / 2 - 60, 310, 3);
         DrawPixelText("UP JUMP", pWidth / 2 - 60, 350, 3);
+        DrawPixelText("CTRL FIRE", pWidth / 2 - 78, 390, 3);
         DrawPixelText("FOLLOW THE CYAN FLOW MARKERS", pWidth / 2 - 225, 410, 3);
         glColor3f(1.0f, 0.78f, 0.12f);
         DrawPixelText("ENTER TO RETURN", pWidth / 2 - 120, pHeight - 70, 3);
@@ -1220,12 +2172,12 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     else if (pScreen == FrontScreen::LocalSetup)
     {
         const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
-        const char* labels[] = {"TRACK", "LAPS", "WEAPONS", "START RACE", "BACK"};
+        const char* labels[] = {"START RACE", "MODE", "TRACK", "LAPS", "RIVALS", "DIFFICULTY", "WEAPONS", "BACK"};
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("LOCAL RACE", pWidth / 2 - 150, 70, 5);
-        for (int option = 0; option < 5; ++option)
+        for (int option = 0; option < 8; ++option)
         {
-            const int top = 160 + option * 72;
+            const int top = 120 + option * 48;
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
@@ -1238,15 +2190,25 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             glColor3f(selected ? 1.0f : 0.72f, selected ? 0.82f : 0.86f,
                       selected ? 0.22f : 0.9f);
             DrawPixelText(labels[option], pWidth / 2 - 218, top + 16, 3);
-            if (option == 0)
+            if (option == 1)
+                DrawPixelText(RaceModeSetupLabel(pRaceMode), pWidth / 2 + 18, top + 19, 2);
+            else if (option == 2)
                 DrawPixelText(trackNames[pTrackIndex], pWidth / 2 + 10, top + 16, 3);
-            else if (option == 1)
+            else if (option == 3)
             {
                 char laps[16];
                 std::snprintf(laps, sizeof(laps), "%d", pLaps);
                 DrawPixelText(laps, pWidth / 2 + 180, top + 16, 3);
             }
-            else if (option == 2)
+            else if (option == 4)
+            {
+                char rivals[16];
+                std::snprintf(rivals, sizeof(rivals), "%d", pRivalCount);
+                DrawPixelText(rivals, pWidth / 2 + 180, top + 16, 3);
+            }
+            else if (option == 5)
+                DrawPixelText(RivalDifficultySetupLabel(pRivalDifficulty), pWidth / 2 + 18, top + 19, 2);
+            else if (option == 6)
                 DrawPixelText(pWeaponsAllowed ? "ALLOWED" : "OFF", pWidth / 2 + 120, top + 16, 3);
         }
         glColor3f(0.72f, 0.82f, 0.84f);
@@ -1258,7 +2220,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     {
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("SETTINGS", pWidth / 2 - 120, 90, 5);
-        glColor3f(0.82f, 0.9f, 0.92f);
+        glColor3f(pSelection == 0 ? 1.0f : 0.82f, pSelection == 0 ? 0.78f : 0.9f,
+                  pSelection == 0 ? 0.12f : 0.92f);
         DrawPixelText("CAMERA DISTANCE", pWidth / 2 - 135, 200, 3);
         const char* cameraOptions[] = {"NEAR", "STANDARD", "FAR"};
         for (int option = 0; option < 3; ++option)
@@ -1269,10 +2232,17 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 glColor3f(0.82f, 0.9f, 0.92f);
             DrawPixelText(cameraOptions[option], pWidth / 2 - 128 + option * 104, 245, 3);
         }
+        glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.78f : 0.9f,
+                  pSelection == 1 ? 0.12f : 0.92f);
+        DrawPixelText("AUDIO FEEDBACK", pWidth / 2 - 120, 335, 3);
+        DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 - 24, 380, 3);
+        glColor3f(pSelection == 2 ? 1.0f : 0.82f, pSelection == 2 ? 0.78f : 0.9f,
+                  pSelection == 2 ? 0.12f : 0.92f);
+        DrawPixelText("BACK", pWidth / 2 - 42, 465, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText("LEFT RIGHT TO CHANGE", pWidth / 2 - 165, 290, 3);
+        DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", pWidth / 2 - 230, pHeight - 94, 2);
         glColor3f(1.0f, 0.78f, 0.12f);
-        DrawPixelText("ENTER TO RETURN", pWidth / 2 - 120, pHeight - 70, 3);
+        DrawPixelText("ENTER CONFIRM  ESC BACK", pWidth / 2 - 168, pHeight - 62, 2);
     }
 
     glPopMatrix();
@@ -1288,10 +2258,12 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
              const std::vector<RaceProgress>& pRivalProgresses,
              const HovercraftState& pPlayerState, const std::vector<HovercraftState>& pRivalStates,
              const RaceGate& pActiveGate, const std::vector<RaceGate>& pWaypoints,
-             bool pShowRivals, int pWinner,
+             bool pShowRivals, bool pWrongWay, int pWinner,
              int pPlayerPosition, int pCompetitorCount, bool pChampionship, int pStartLights,
-             bool pShowSetupOverlay, const char* pChampionshipPoints,
-             double pPlayerElapsedSeconds, int pWidth, int pHeight)
+             bool pShowSetupOverlay, bool pShowResultOverlay, const char* pChampionshipPoints,
+             double pPlayerElapsedSeconds, const LapTiming& pLapTiming, const Missile& pMissile,
+             bool pWeaponsAllowed, bool pPauseMenuOpen, int pPauseMenuSelection,
+             int pResultSelection, int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
     glDisable(GL_FOG);
@@ -1303,21 +2275,6 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
-
-    glColor3f(0.02f, 0.05f, 0.08f);
-    glBegin(GL_QUADS);
-    glVertex2i(24, 24);
-    glVertex2i(284, 24);
-    glVertex2i(284, 46);
-    glVertex2i(24, 46);
-    glEnd();
-    glColor3f(0.2f, 0.9f, 1.0f);
-    glBegin(GL_QUADS);
-    glVertex2i(27, 27);
-    glVertex2i(27 + static_cast<int>(254.0 * pPlayerState.mBoostEnergy), 27);
-    glVertex2i(27 + static_cast<int>(254.0 * pPlayerState.mBoostEnergy), 43);
-    glVertex2i(27, 43);
-    glEnd();
 
     const int speed = static_cast<int>(std::fabs(pPlayerState.mSpeed));
     const double gateDeltaX = pActiveGate.mX - pPlayerState.mX;
@@ -1332,23 +2289,72 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glColor3f(0.2f, 0.9f, 1.0f);
     DrawPixelText(gateLabel, 300, 45, 2);
 
+    const int resourceLeft = 24;
+    const int resourceWidth = 122;
+    const int resourceHeight = 9;
+    const int fuelWidth = static_cast<int>(resourceWidth * pPlayerState.mFuel);
+    const int missileWidth = static_cast<int>(resourceWidth * pMissile.RechargeFraction());
+    glColor3f(0.72f, 0.82f, 0.84f);
+    DrawPixelText("FUEL", resourceLeft, 132, 2);
+    DrawPixelText(pWeaponsAllowed ? "MISSILE" : "WEAPONS OFF", resourceLeft, 154, 2);
+    glColor3f(0.02f, 0.05f, 0.08f);
+    glBegin(GL_QUADS);
+    glVertex2i(resourceLeft + 62, 134);
+    glVertex2i(resourceLeft + 62 + resourceWidth, 134);
+    glVertex2i(resourceLeft + 62 + resourceWidth, 134 + resourceHeight);
+    glVertex2i(resourceLeft + 62, 134 + resourceHeight);
+    glVertex2i(resourceLeft + 62, 156);
+    glVertex2i(resourceLeft + 62 + resourceWidth, 156);
+    glVertex2i(resourceLeft + 62 + resourceWidth, 156 + resourceHeight);
+    glVertex2i(resourceLeft + 62, 156 + resourceHeight);
+    glEnd();
+    glColor3f(0.18f, 0.78f, 0.54f);
+    glBegin(GL_QUADS);
+    glVertex2i(resourceLeft + 62, 134);
+    glVertex2i(resourceLeft + 62 + fuelWidth, 134);
+    glVertex2i(resourceLeft + 62 + fuelWidth, 134 + resourceHeight);
+    glVertex2i(resourceLeft + 62, 134 + resourceHeight);
+    glEnd();
+    glColor3f(pMissile.Ready() ? 0.2f : 0.92f, pMissile.Ready() ? 0.82f : 0.52f,
+              pMissile.Ready() ? 0.96f : 0.14f);
+    glBegin(GL_QUADS);
+    glVertex2i(resourceLeft + 62, 156);
+    glVertex2i(resourceLeft + 62 + (pWeaponsAllowed ? missileWidth : 0), 156);
+    glVertex2i(resourceLeft + 62 + (pWeaponsAllowed ? missileWidth : 0), 156 + resourceHeight);
+    glVertex2i(resourceLeft + 62, 156 + resourceHeight);
+    glEnd();
+
     const int displayedLap = pPlayerProgress.mCompletedLaps + 1 > pTargetLaps
         ? pTargetLaps : pPlayerProgress.mCompletedLaps + 1;
     const int elapsedSeconds = static_cast<int>(pPlayerProgress.mElapsedSeconds);
+    const int currentLapSeconds = static_cast<int>(pLapTiming.mCurrentSeconds);
+    const int bestLapSeconds = static_cast<int>(pLapTiming.mBestSeconds);
+    const int lastSplitSeconds = static_cast<int>(pLapTiming.mLastSplitSeconds);
     char lapLabel[24];
     char timeLabel[32];
+    char currentLapLabel[32];
+    char bestLapLabel[32];
+    char splitLabel[32];
     char positionLabel[24];
     std::snprintf(lapLabel, sizeof(lapLabel), "LAP %d OF %d", displayedLap, pTargetLaps);
     std::snprintf(timeLabel, sizeof(timeLabel), "TIME %d M %d S", elapsedSeconds / 60, elapsedSeconds % 60);
+    std::snprintf(currentLapLabel, sizeof(currentLapLabel), "LAP TIME %d M %d S",
+                  currentLapSeconds / 60, currentLapSeconds % 60);
+    std::snprintf(bestLapLabel, sizeof(bestLapLabel), "BEST %d M %d S",
+                  bestLapSeconds / 60, bestLapSeconds % 60);
+    std::snprintf(splitLabel, sizeof(splitLabel), "SPLIT %d M %d S",
+                  lastSplitSeconds / 60, lastSplitSeconds % 60);
     std::snprintf(positionLabel, sizeof(positionLabel), "PLACE %d OF %d", pPlayerPosition, pCompetitorCount);
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText(lapLabel, pWidth / 2 + 36, 27, 2);
     DrawPixelText(timeLabel, pWidth / 2 + 36, 45, 2);
+    DrawPixelText(currentLapLabel, pWidth / 2 + 36, 63, 2);
+    DrawPixelText(bestLapLabel, pWidth / 2 + 36, 81, 2);
+    DrawPixelText(splitLabel, pWidth / 2 + 36, 99, 2);
     glColor3f(1.0f, 0.78f, 0.12f);
-    DrawPixelText(positionLabel, pWidth / 2 + 36, 63, 2);
+    DrawPixelText(positionLabel, pWidth / 2 + 36, 117, 2);
 
-    const double targetHeading = std::atan2(pActiveGate.mY - pPlayerState.mY,
-                                            pActiveGate.mX - pPlayerState.mX);
+    const double targetHeading = GetGateDirection(pPlayerState, pActiveGate);
     const double headingOffset = targetHeading - pPlayerState.mHeading;
     const double forwardX = std::sin(headingOffset);
     const double forwardY = -std::cos(headingOffset);
@@ -1369,6 +2375,34 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glVertex2d(pointerX - forwardX * 6.0 + sideX * 6.0, pointerY - forwardY * 6.0 + sideY * 6.0);
     glVertex2d(pointerX - forwardX * 6.0 - sideX * 6.0, pointerY - forwardY * 6.0 - sideY * 6.0);
     glEnd();
+
+    if (pWrongWay)
+    {
+        glColor3f(0.72f, 0.06f, 0.08f);
+        glBegin(GL_QUADS);
+        glVertex2i(pointerX - 96, pointerY - 54);
+        glVertex2i(pointerX + 96, pointerY - 54);
+        glVertex2i(pointerX + 96, pointerY - 32);
+        glVertex2i(pointerX - 96, pointerY - 32);
+        glEnd();
+        glColor3f(1.0f, 0.82f, 0.2f);
+        DrawPixelText("WRONG WAY", pointerX - 72, pointerY - 50, 2);
+    }
+
+    if (pPlayerState.mSpinOutSeconds > 0.0)
+    {
+        const int alertWidth = 320;
+        const int alertLeft = (pWidth - alertWidth) / 2;
+        glColor3f(0.5f, 0.03f, 0.04f);
+        glBegin(GL_QUADS);
+        glVertex2i(alertLeft, 28);
+        glVertex2i(alertLeft + alertWidth, 28);
+        glVertex2i(alertLeft + alertWidth, 76);
+        glVertex2i(alertLeft, 76);
+        glEnd();
+        glColor3f(1.0f, 0.74f, 0.12f);
+        DrawPixelText("LOSS OF CONTROL", alertLeft + 20, 42, 4);
+    }
 
     if (!pWaypoints.empty())
     {
@@ -1477,9 +2511,12 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
 
     if (pShowSetupOverlay)
         DrawSetupOverlay(pWidth, pHeight);
-    else if (pWinner != 0)
+    else if (pWinner != 0 && pShowResultOverlay)
         DrawResultOverlay(pWinner, pPlayerPosition, pCompetitorCount, pChampionship,
-                          pChampionshipPoints, pPlayerElapsedSeconds, pWidth, pHeight);
+                          pChampionshipPoints, pPlayerElapsedSeconds, pLapTiming, pResultSelection,
+                          pWidth, pHeight);
+    if (pPauseMenuOpen)
+        DrawPauseOverlay(pPauseMenuSelection, pWidth, pHeight);
 
     for (int light = 0; light < 3; ++light)
     {
@@ -1547,6 +2584,8 @@ int main()
     glFogf(GL_FOG_END, 110.0f);
     const GLuint roadTexture = CreateRoadTexture();
     const GLuint wallTexture = CreateWallTexture();
+    AudioFeedback audioFeedback;
+    audioFeedback.Initialize();
 
     SDL_GameController* controller = nullptr;
     for (int joystick = 0; joystick < SDL_NumJoysticks(); ++joystick)
@@ -1571,6 +2610,7 @@ int main()
     Course course(courseWaypoints, selectedTrack.mRoadHalfWidth);
     std::vector<BoostPad> boostPads = selectedTrack.mBoostPads;
     std::vector<HazardZone> hazardZones = selectedTrack.mHazardZones;
+    std::vector<Mine> mines = selectedTrack.mMines;
     std::vector<RaisedSection> raisedSections = selectedTrack.mRaisedSections;
     RaceMode raceMode = RaceMode::SingleRace;
     RivalDifficulty rivalDifficulty = RivalDifficulty::Standard;
@@ -1581,16 +2621,13 @@ int main()
     std::vector<Race> rivalRaces(kRivalCount, Race(checkpoints, finish, targetLaps));
     LapTimer lapTimer;
     RaceStart raceStart;
-    std::vector<RaceGate> rivalRoute = checkpoints;
+    std::vector<RaceGate> rivalRoute(courseWaypoints.begin() + 1, courseWaypoints.end());
     rivalRoute.push_back(finish);
     std::vector<RivalTuning> rivalTunings(kRivalCount);
     rivalTunings[0].mPace = 1.0;
     rivalTunings[0].mSteeringGain = 1.35;
-    rivalTunings[0].mBoostHeadingError = 0.26;
     rivalTunings[1].mPace = 0.88;
     rivalTunings[1].mSteeringGain = 1.85;
-    rivalTunings[1].mBoostHeadingError = 0.14;
-    rivalTunings[1].mBoostDistanceMultiplier = 2.8;
     std::vector<RivalController> rivalControllers;
     const auto rebuildRivalControllers = [&]()
     {
@@ -1627,8 +2664,13 @@ int main()
         const double laneY = forwardX;
         for (int rivalIndex = 0; rivalIndex < kRivalCount; ++rivalIndex)
         {
-            const double laneOffset = rivalIndex == 0 ? -3.2 : 3.2;
+            const int gridRow = rivalIndex / 3;
+            const int gridColumn = rivalIndex % 3 - 1;
+            const double laneOffset = gridColumn * 3.6;
+            const double rowOffset = 3.8 + gridRow * 4.2;
             rivalSpawns[rivalIndex] = spawn;
+            rivalSpawns[rivalIndex].mX -= forwardX * rowOffset;
+            rivalSpawns[rivalIndex].mY -= forwardY * rowOffset;
             rivalSpawns[rivalIndex].mX += laneX * laneOffset;
             rivalSpawns[rivalIndex].mY += laneY * laneOffset;
         }
@@ -1642,14 +2684,43 @@ int main()
     const double tickFrequency = static_cast<double>(SDL_GetPerformanceFrequency());
     FixedStepClock simulationClock;
     int winner = 0;
+    bool continueDriving = false;
+    bool pauseMenuOpen = false;
+    int pauseMenuSelection = 0;
+    int resultSelection = 0;
     bool steeringAssistEnabled = false;
     bool brakingAssistEnabled = false;
     bool showControls = false;
     FrontScreen frontScreen = FrontScreen::Welcome;
     int frontSelection = 0;
     int localSetupSelection = 0;
+    int settingsSelection = 0;
     int cameraDistanceSetting = 1;
-    bool weaponsAllowed = false;
+    bool weaponsAllowed = true;
+    TcpLobbyClient lobbyClient;
+    bool lobbyHelloSent = false;
+    std::string lobbyDisplayName = "PILOT";
+    const char* systemUserName = SDL_getenv("USER");
+    if (systemUserName != nullptr && systemUserName[0] != '\0')
+        lobbyDisplayName = systemUserName;
+    for (char& character : lobbyDisplayName)
+    {
+        if ((character < 'A' || character > 'Z') && (character < 'a' || character > 'z')
+            && (character < '0' || character > '9') && character != '_' && character != '-')
+            character = '_';
+    }
+    if (lobbyDisplayName.size() > 24)
+        lobbyDisplayName.resize(24);
+    char preferencesFile[512] = {};
+    char* preferencesDirectory = SDL_GetPrefPath("OpenHover", "OpenHover");
+    if (preferencesDirectory != nullptr)
+    {
+        std::snprintf(preferencesFile, sizeof(preferencesFile), "%ssetup.cfg", preferencesDirectory);
+        SDL_free(preferencesDirectory);
+    }
+    Missile missile;
+    bool fireHeld = false;
+    double impactSoundCooldown = 0.0;
     InputRecording activeRecording;
     InputRecording ghostRecording;
     std::size_t ghostFrame = 0;
@@ -1665,6 +2736,8 @@ int main()
             ghostActive = true;
         }
         activeRecording.Clear();
+        missile.Reset();
+        fireHeld = false;
         hovercraft.Reset(spawn);
         race.Reset();
         lapTimer.Reset();
@@ -1677,6 +2750,8 @@ int main()
         }
         simulationClock.Reset();
         winner = 0;
+        continueDriving = false;
+        resultSelection = 0;
         if (pStartCountdown)
             raceStart.Begin();
     };
@@ -1693,84 +2768,496 @@ int main()
         course = Course(courseWaypoints, selectedTrack.mRoadHalfWidth);
         boostPads = selectedTrack.mBoostPads;
         hazardZones = selectedTrack.mHazardZones;
+        mines = selectedTrack.mMines;
         raisedSections = selectedTrack.mRaisedSections;
         race = Race(checkpoints, finish, targetLaps);
         rivalRaces.assign(kRivalCount, Race(checkpoints, finish, targetLaps));
-        rivalRoute = checkpoints;
+        rivalRoute.assign(courseWaypoints.begin() + 1, courseWaypoints.end());
         rivalRoute.push_back(finish);
         configureStartGrid();
         rebuildRivalControllers();
         resetRace(pStartCountdown);
     };
+    const auto savePreferences = [&]()
+    {
+        if (preferencesFile[0] == '\0')
+            return;
+        FILE* preferences = std::fopen(preferencesFile, "w");
+        if (preferences == nullptr)
+            return;
+        std::fprintf(preferences, "%d %d %d %d %d\n", trackIndex, targetLaps,
+                     weaponsAllowed ? 1 : 0, cameraDistanceSetting, audioFeedback.Enabled() ? 1 : 0);
+        std::fclose(preferences);
+    };
+    if (preferencesFile[0] != '\0')
+    {
+        FILE* preferences = std::fopen(preferencesFile, "r");
+        int savedTrack = 0;
+        int savedLaps = 3;
+        int savedWeapons = 1;
+        int savedCameraDistance = 1;
+        int savedAudio = 1;
+        if (preferences != nullptr
+            && std::fscanf(preferences, "%d %d %d %d %d", &savedTrack, &savedLaps,
+                           &savedWeapons, &savedCameraDistance, &savedAudio) == 5)
+        {
+            trackIndex = savedTrack >= 0 && savedTrack < static_cast<int>(builtInTracks.size())
+                ? savedTrack : 0;
+            targetLaps = savedLaps >= 1 && savedLaps <= 5 ? savedLaps : 3;
+            weaponsAllowed = savedWeapons != 0;
+            cameraDistanceSetting = savedCameraDistance >= 0 && savedCameraDistance <= 2
+                ? savedCameraDistance : 1;
+            audioFeedback.SetEnabled(savedAudio != 0);
+        }
+        if (preferences != nullptr)
+            std::fclose(preferences);
+    }
+    loadTrack(false);
+    const auto changeLocalSetupOption = [&](int pOption, int pDirection)
+    {
+        if (pOption == 1)
+        {
+            const int changes = pDirection > 0 ? 1 : 3;
+            for (int change = 0; change < changes; ++change)
+                raceMode = NextRaceMode(raceMode);
+            championship.Reset();
+            loadTrack(false);
+        }
+        else if (pOption == 2)
+        {
+            trackIndex = (trackIndex + pDirection + static_cast<int>(builtInTracks.size()))
+                % static_cast<int>(builtInTracks.size());
+            loadTrack(false);
+        }
+        else if (pOption == 3)
+        {
+            targetLaps = pDirection > 0 ? (targetLaps == 5 ? 1 : targetLaps + 1)
+                                          : (targetLaps == 1 ? 5 : targetLaps - 1);
+            loadTrack(false);
+        }
+        else if (pOption == 4)
+        {
+            rivalCount = (rivalCount + pDirection + kRivalCount + 1) % (kRivalCount + 1);
+            resetRace(false);
+        }
+        else if (pOption == 5)
+        {
+            const int changes = pDirection > 0 ? 1 : 2;
+            for (int change = 0; change < changes; ++change)
+                rivalDifficulty = NextRivalDifficulty(rivalDifficulty);
+            rebuildRivalControllers();
+            resetRace(false);
+        }
+        else if (pOption == 6)
+            weaponsAllowed = !weaponsAllowed;
+        savePreferences();
+    };
+    const auto startLocalRace = [&]()
+    {
+        frontScreen = FrontScreen::RaceSetup;
+        resetRace();
+    };
+    const auto returnToMainMenu = [&]()
+    {
+        pauseMenuOpen = false;
+        continueDriving = false;
+        frontScreen = FrontScreen::Welcome;
+    };
+    const auto advanceResult = [&]()
+    {
+        if (raceMode == RaceMode::Championship)
+        {
+            if (championship.AdvanceEvent())
+            {
+                trackIndex = championship.CurrentEvent();
+                loadTrack();
+            }
+            else if (championship.Complete())
+            {
+                championship.Reset();
+                trackIndex = championship.CurrentEvent();
+                loadTrack();
+            }
+            else
+                resetRace();
+        }
+        else
+            resetRace();
+    };
+    const auto leaveLobby = [&]()
+    {
+        SDL_StopTextInput();
+        lobbyClient.Disconnect();
+        lobbyHelloSent = false;
+        gLobbyPlayers.clear();
+        gLobbyRooms.clear();
+        gLobbyChatMessages.clear();
+        gLobbyChatInput.clear();
+        gLobbySelectedRoom = -1;
+        gLobbyPlayerId = 0;
+        gLobbyStatus = "DISCONNECTED";
+    };
+    const auto connectLobby = [&]()
+    {
+        leaveLobby();
+        SDL_StartTextInput();
+        gLobbyStatus = lobbyClient.Connect("192.168.10.181", 9700)
+            ? "CONNECTING" : "SERVER UNAVAILABLE";
+    };
+    const auto updateLobby = [&]()
+    {
+        if (frontScreen != FrontScreen::Multiplayer && frontScreen != FrontScreen::HostRaceSetup)
+            return;
+        lobbyClient.Tick();
+        if (lobbyClient.State() == TcpLobbyClientState::Connecting)
+            gLobbyStatus = "CONNECTING";
+        else if (lobbyClient.State() == TcpLobbyClientState::Failed)
+            gLobbyStatus = "SERVER UNAVAILABLE";
+        else if (lobbyClient.State() == TcpLobbyClientState::Connected && !lobbyHelloSent)
+        {
+            lobbyHelloSent = lobbyClient.SendCommand("HELLO " + lobbyDisplayName);
+            gLobbyStatus = lobbyHelloSent ? "CONNECTING" : "SERVER UNAVAILABLE";
+        }
+        for (const std::string& message : lobbyClient.TakeMessages())
+        {
+            if (message.compare(0, 5, "LOBBY") == 0)
+            {
+                ParseLobbySnapshot(message);
+                gLobbyStatus = "CONNECTED";
+            }
+            else if (message.compare(0, 8, "WELCOME ") == 0)
+                gLobbyPlayerId = std::atoi(message.substr(8).c_str());
+            else if (message.compare(0, 5, "CHAT ") == 0)
+            {
+                const std::size_t textStart = message.find(' ', 5);
+                gLobbyChatMessages.push_back(textStart == std::string::npos
+                    ? message.substr(5) : message.substr(textStart + 1));
+                if (gLobbyChatMessages.size() > 32)
+                    gLobbyChatMessages.erase(gLobbyChatMessages.begin());
+            }
+            else if (message.compare(0, 5, "ROOM ") == 0 && gHostCreatePending)
+            {
+                gHostCreatePending = false;
+                gLobbyStatus = "ROOM CREATED";
+                frontScreen = FrontScreen::Multiplayer;
+            }
+            else if (message.compare(0, 6, "ERROR ") == 0)
+            {
+                gHostCreatePending = false;
+                gLobbyStatus = "SERVER ERROR";
+            }
+        }
+    };
     bool running = true;
     while (running)
     {
+        updateLobby();
         SDL_Event event;
         while (SDL_PollEvent(&event) != 0)
         {
             if (event.type == SDL_QUIT)
                 running = false;
+            if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
+            {
+                int windowWidth = 0;
+                int windowHeight = 0;
+                int drawableWidth = 0;
+                int drawableHeight = 0;
+                SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+                SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
+                const int mouseX = event.button.x * drawableWidth / std::max(1, windowWidth);
+                const int mouseY = event.button.y * drawableHeight / std::max(1, windowHeight);
+                if (frontScreen == FrontScreen::Welcome)
+                {
+                    const int option = (mouseY - 145) / 72;
+                    if (option >= 0 && option < 5
+                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 200, 145 + option * 72, 400, 62))
+                    {
+                        if (option == 0)
+                        {
+                            frontScreen = FrontScreen::LocalSetup;
+                            localSetupSelection = 0;
+                            loadTrack(false);
+                        }
+                        else if (option == 1)
+                        {
+                            frontScreen = FrontScreen::Multiplayer;
+                            connectLobby();
+                        }
+                        else if (option == 2)
+                            frontScreen = FrontScreen::HowToPlay;
+                        else if (option == 3)
+                        {
+                            frontScreen = FrontScreen::Settings;
+                            settingsSelection = 0;
+                        }
+                        else
+                            running = false;
+                    }
+                }
+                else if (frontScreen == FrontScreen::Multiplayer)
+                {
+                    const int margin = 18;
+                    const int gap = 12;
+                    const int top = 16;
+                    const int leftWidth = drawableWidth * 29 / 100;
+                    const int actionWidth = drawableWidth * 15 / 100;
+                    const int detailWidth = drawableWidth - margin * 2 - gap * 2 - leftWidth - actionWidth;
+                    const int topHeight = drawableHeight * 42 / 100;
+                    const int actionLeft = margin + leftWidth + gap + detailWidth + gap;
+                    const int chatLeft = margin + leftWidth + gap + 16;
+                    const int chatWidth = detailWidth + gap + actionWidth - 32;
+                    const int bottomTop = top + topHeight + gap;
+                    const int bottomHeight = drawableHeight - bottomTop - margin;
+                    const int inputTop = bottomTop + bottomHeight - 46;
+                    if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 16, actionWidth - 32, 42)
+                        && gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
+                    {
+                        const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
+                        lobbyClient.SendCommand(std::string(room.mHostId == gLobbyPlayerId ? "START " : "JOIN ")
+                            + std::to_string(room.mId));
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42))
+                    {
+                        gHostSetupSelection = 0;
+                        frontScreen = FrontScreen::HostRaceSetup;
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + topHeight - 58, actionWidth - 32, 42))
+                    {
+                        leaveLobby();
+                        frontScreen = FrontScreen::Welcome;
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, margin + 16, top + 54, leftWidth - 32,
+                                           topHeight - 70) && !gLobbyRooms.empty())
+                    {
+                        gLobbySelectedRoom = std::min(static_cast<int>(gLobbyRooms.size()) - 1,
+                            std::max(0, (mouseY - (top + 58)) / 38));
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, chatLeft, inputTop, chatWidth, 32))
+                        SDL_StartTextInput();
+                }
+                else if (frontScreen == FrontScreen::HostRaceSetup)
+                {
+                    const int panelLeft = drawableWidth / 2 - 280;
+                    const int panelTop = 72;
+                    const int option = (mouseY - (panelTop + 82)) / 46;
+                    if (option >= 0 && option < 8
+                        && IsPointInRect(mouseX, mouseY, panelLeft + 18, panelTop + 82 + option * 46, 524, 36))
+                    {
+                        gHostSetupSelection = option;
+                        if (option == 6)
+                        {
+                            const std::string command = "CREATE OPEN RACE|" + std::to_string(gHostRaceMode)
+                                + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
+                                + "|" + std::to_string(gHostPlayerCapacity) + "|"
+                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0");
+                            gHostCreatePending = lobbyClient.SendCommand(command);
+                            gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
+                        }
+                        else if (option == 7)
+                            frontScreen = FrontScreen::Multiplayer;
+                    }
+                }
+                else if (frontScreen == FrontScreen::HowToPlay)
+                    frontScreen = FrontScreen::Welcome;
+                else if (frontScreen == FrontScreen::Settings)
+                {
+                    if (mouseY >= 220 && mouseY < 280)
+                    {
+                        cameraDistanceSetting = std::max(0, std::min(2, (mouseX - (drawableWidth / 2 - 150)) / 104));
+                        savePreferences();
+                    }
+                    else if (mouseY >= 330 && mouseY < 410)
+                    {
+                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                        savePreferences();
+                    }
+                    else if (mouseY >= 440 && mouseY < 530)
+                        frontScreen = FrontScreen::Welcome;
+                }
+                else if (frontScreen == FrontScreen::LocalSetup)
+                {
+                    const int option = (mouseY - 120) / 48;
+                    if (option >= 0 && option < 8
+                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250, 120 + option * 48, 500, 52))
+                    {
+                        localSetupSelection = option;
+                        if (option == 0)
+                            startLocalRace();
+                        else if (option == 7)
+                            frontScreen = FrontScreen::Welcome;
+                        else
+                            changeLocalSetupOption(option, 1);
+                    }
+                }
+                else if (pauseMenuOpen)
+                {
+                    const int left = (drawableWidth - 340) / 2;
+                    const int top = (drawableHeight - 236) / 2;
+                    const int option = (mouseY - (top + 82)) / 44;
+                    if (option >= 0 && option < 3
+                        && IsPointInRect(mouseX, mouseY, left + 24, top + 82 + option * 44, 292, 34))
+                    {
+                        pauseMenuSelection = option;
+                        if (option == 0)
+                            pauseMenuOpen = false;
+                        else if (option == 1)
+                            returnToMainMenu();
+                        else
+                            running = false;
+                    }
+                }
+                else if (winner != 0 && !continueDriving)
+                {
+                    const int panelHeight = raceMode == RaceMode::Championship ? 310 : 268;
+                    const int left = (drawableWidth - 420) / 2;
+                    const int top = (drawableHeight - panelHeight) / 2 - 10;
+                    const int actionsTop = top + (raceMode == RaceMode::Championship ? 248 : 198);
+                    if (IsPointInRect(mouseX, mouseY, left + 24, actionsTop, 178, 38))
+                    {
+                        resultSelection = 0;
+                        advanceResult();
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, left + 218, actionsTop, 178, 38))
+                    {
+                        resultSelection = 1;
+                        returnToMainMenu();
+                    }
+                }
+                continue;
+            }
+            if (frontScreen != FrontScreen::RaceSetup && event.type == SDL_KEYDOWN)
+            {
+                if (event.key.keysym.sym == SDLK_UP || event.key.keysym.sym == SDLK_DOWN
+                    || event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT)
+                    audioFeedback.PlayMenuMove();
+                else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                    audioFeedback.PlayMenuConfirm();
+            }
+            if (frontScreen == FrontScreen::Multiplayer && event.type == SDL_TEXTINPUT)
+            {
+                if (gLobbyChatInput.size() + std::strlen(event.text.text) <= 120)
+                    gLobbyChatInput += event.text.text;
+                continue;
+            }
             if (frontScreen != FrontScreen::RaceSetup)
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    if (frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
+                    if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
                         || frontScreen == FrontScreen::LocalSetup)
+                    {
+                        if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup)
+                            leaveLobby();
                         frontScreen = FrontScreen::Welcome;
+                    }
                     else
                         running = false;
                 }
-                else if (event.type == SDL_KEYDOWN && (frontScreen == FrontScreen::HowToPlay
-                         || frontScreen == FrontScreen::Settings)
-                         && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
-                    frontScreen = FrontScreen::Welcome;
-                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
-                         && event.key.keysym.sym == SDLK_LEFT)
-                    cameraDistanceSetting = cameraDistanceSetting == 0 ? 2 : cameraDistanceSetting - 1;
-                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
-                         && event.key.keysym.sym == SDLK_RIGHT)
-                    cameraDistanceSetting = (cameraDistanceSetting + 1) % 3;
-                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::LocalSetup)
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer)
+                {
+                    if (event.key.keysym.sym == SDLK_BACKSPACE && !gLobbyChatInput.empty())
+                        gLobbyChatInput.erase(gLobbyChatInput.size() - 1);
+                    else if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                             && !gLobbyChatInput.empty())
+                    {
+                        if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
+                            gLobbyChatInput.clear();
+                    }
+                    else if (event.key.keysym.sym == SDLK_UP && !gLobbyRooms.empty())
+                        gLobbySelectedRoom = (gLobbySelectedRoom + static_cast<int>(gLobbyRooms.size()) - 1)
+                            % static_cast<int>(gLobbyRooms.size());
+                    else if (event.key.keysym.sym == SDLK_DOWN && !gLobbyRooms.empty())
+                        gLobbySelectedRoom = (gLobbySelectedRoom + 1) % static_cast<int>(gLobbyRooms.size());
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::HostRaceSetup)
                 {
                     if (event.key.keysym.sym == SDLK_UP)
-                        localSetupSelection = (localSetupSelection + 4) % 5;
+                        gHostSetupSelection = (gHostSetupSelection + 7) % 8;
                     else if (event.key.keysym.sym == SDLK_DOWN)
-                        localSetupSelection = (localSetupSelection + 1) % 5;
+                        gHostSetupSelection = (gHostSetupSelection + 1) % 8;
                     else if (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT)
                     {
                         const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
-                        if (localSetupSelection == 0)
-                        {
-                            trackIndex = (trackIndex + direction + static_cast<int>(builtInTracks.size()))
-                                % static_cast<int>(builtInTracks.size());
-                            loadTrack(false);
-                        }
-                        else if (localSetupSelection == 1)
-                        {
-                            targetLaps = direction > 0 ? (targetLaps == 5 ? 1 : targetLaps + 1)
-                                                       : (targetLaps == 1 ? 5 : targetLaps - 1);
-                            loadTrack(false);
-                        }
-                        else if (localSetupSelection == 2)
-                            weaponsAllowed = !weaponsAllowed;
+                        if (gHostSetupSelection == 0)
+                            gHostRaceMode = (gHostRaceMode + direction + 4) % 4;
+                        else if (gHostSetupSelection == 1)
+                            gHostTrackIndex = (gHostTrackIndex + direction + 3) % 3;
+                        else if (gHostSetupSelection == 2)
+                            gHostLapCount = direction > 0 ? (gHostLapCount == 5 ? 1 : gHostLapCount + 1)
+                                                               : (gHostLapCount == 1 ? 5 : gHostLapCount - 1);
+                        else if (gHostSetupSelection == 3)
+                            gHostPlayerCapacity = direction > 0
+                                ? (gHostPlayerCapacity == 8 ? 2 : gHostPlayerCapacity + 1)
+                                : (gHostPlayerCapacity == 2 ? 8 : gHostPlayerCapacity - 1);
+                        else if (gHostSetupSelection == 4)
+                            gHostRivalCount = (gHostRivalCount + direction + 8) % 8;
+                        else if (gHostSetupSelection == 5)
+                            gHostWeaponsAllowed = !gHostWeaponsAllowed;
                     }
                     else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                     {
-                        if (localSetupSelection == 3)
+                        if (gHostSetupSelection == 6)
                         {
-                            frontScreen = FrontScreen::RaceSetup;
-                            resetRace();
+                            const std::string command = "CREATE OPEN RACE|" + std::to_string(gHostRaceMode)
+                                + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
+                                + "|" + std::to_string(gHostPlayerCapacity) + "|"
+                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0");
+                            gHostCreatePending = lobbyClient.SendCommand(command);
+                            gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
                         }
-                        else if (localSetupSelection == 4)
+                        else if (gHostSetupSelection == 7)
+                            frontScreen = FrontScreen::Multiplayer;
+                    }
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::HowToPlay
+                         && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
+                    frontScreen = FrontScreen::Welcome;
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
+                         && event.key.keysym.sym == SDLK_UP)
+                    settingsSelection = (settingsSelection + 2) % 3;
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
+                         && event.key.keysym.sym == SDLK_DOWN)
+                    settingsSelection = (settingsSelection + 1) % 3;
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
+                         && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
+                {
+                    const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
+                    if (settingsSelection == 0)
+                        cameraDistanceSetting = (cameraDistanceSetting + direction + 3) % 3;
+                    else if (settingsSelection == 1)
+                        audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                    savePreferences();
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
+                         && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                         && settingsSelection == 2)
+                    frontScreen = FrontScreen::Welcome;
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::LocalSetup)
+                {
+                    if (event.key.keysym.sym == SDLK_UP)
+                        localSetupSelection = (localSetupSelection + 7) % 8;
+                    else if (event.key.keysym.sym == SDLK_DOWN)
+                        localSetupSelection = (localSetupSelection + 1) % 8;
+                    else if (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT)
+                    {
+                        const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
+                        changeLocalSetupOption(localSetupSelection, direction);
+                    }
+                    else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                    {
+                        if (localSetupSelection == 0)
+                            startLocalRace();
+                        else if (localSetupSelection == 7)
                             frontScreen = FrontScreen::Welcome;
                     }
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Welcome)
                 {
                     if (event.key.keysym.sym == SDLK_UP)
-                        frontSelection = (frontSelection + 3) % 4;
+                        frontSelection = (frontSelection + 4) % 5;
                     else if (event.key.keysym.sym == SDLK_DOWN)
-                        frontSelection = (frontSelection + 1) % 4;
+                        frontSelection = (frontSelection + 1) % 5;
                     else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                     {
                         if (frontSelection == 0)
@@ -1780,9 +3267,17 @@ int main()
                             loadTrack(false);
                         }
                         else if (frontSelection == 1)
-                            frontScreen = FrontScreen::HowToPlay;
+                        {
+                            frontScreen = FrontScreen::Multiplayer;
+                            connectLobby();
+                        }
                         else if (frontSelection == 2)
+                            frontScreen = FrontScreen::HowToPlay;
+                        else if (frontSelection == 3)
+                        {
                             frontScreen = FrontScreen::Settings;
+                            settingsSelection = 0;
+                        }
                         else
                             running = false;
                     }
@@ -1790,28 +3285,51 @@ int main()
                 continue;
             }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
-                running = false;
-                    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r && winner != 0)
-                    {
-                        if (raceMode == RaceMode::Championship)
-                        {
-                            if (championship.AdvanceEvent())
-                            {
-                                trackIndex = championship.CurrentEvent();
-                                loadTrack();
-                            }
-                            else if (championship.Complete())
-                            {
-                                championship.Reset();
-                                trackIndex = championship.CurrentEvent();
-                                loadTrack();
-                            }
-                            else
-                                resetRace();
-                        }
-                        else
-                            resetRace();
-                    }
+            {
+                pauseMenuOpen = !pauseMenuOpen;
+                pauseMenuSelection = 0;
+                continue;
+            }
+            if (pauseMenuOpen)
+            {
+                if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_UP)
+                    pauseMenuSelection = (pauseMenuSelection + 2) % 3;
+                else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_DOWN)
+                    pauseMenuSelection = (pauseMenuSelection + 1) % 3;
+                else if (event.type == SDL_KEYDOWN
+                         && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
+                {
+                    if (pauseMenuSelection == 0)
+                        pauseMenuOpen = false;
+                    else if (pauseMenuSelection == 1)
+                        returnToMainMenu();
+                    else
+                        running = false;
+                }
+                continue;
+            }
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_c && winner != 0)
+                continueDriving = true;
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_m && winner != 0)
+                returnToMainMenu();
+            if (event.type == SDL_KEYDOWN && winner != 0 && !continueDriving
+                && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
+            {
+                resultSelection = 1 - resultSelection;
+                continue;
+            }
+            if (event.type == SDL_KEYDOWN
+                && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
+                && winner != 0 && !continueDriving)
+            {
+                if (resultSelection == 0)
+                    advanceResult();
+                else
+                    returnToMainMenu();
+                continue;
+            }
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r && winner != 0)
+                advanceResult();
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v)
                 steeringAssistEnabled = !steeringAssistEnabled;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_b)
@@ -1841,28 +3359,31 @@ int main()
         const double frameSeconds = (currentTick - previousTick) / tickFrequency;
         previousTick = currentTick;
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
+        const bool shiftPressed = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+        const bool downPressed = keys[SDL_SCANCODE_DOWN];
         HovercraftInput input;
-        input.mThrottle = (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]
-            || keys[SDL_SCANCODE_W] ? 1.0 : 0.0)
-            - (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN] ? 1.0 : 0.0);
+        input.mThrottle = (shiftPressed || keys[SDL_SCANCODE_W] ? 1.0 : 0.0)
+            - (keys[SDL_SCANCODE_S] || downPressed ? 1.0 : 0.0);
         input.mSteering = (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0)
             - (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
-        input.mBoost = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
         input.mJump = keys[SDL_SCANCODE_UP];
+        input.mFire = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
+        input.mReverseFacing = shiftPressed && downPressed;
         if (controller != nullptr)
         {
             input.mSteering += ControllerAxis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
             input.mThrottle += SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0;
             input.mThrottle -= SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0;
-            input.mBoost = input.mBoost || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A);
             input.mJump = input.mJump || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B);
+            input.mFire = input.mFire || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X);
         }
-        const int simulationSteps = simulationClock.Consume(frameSeconds);
+        const int simulationSteps = pauseMenuOpen ? 0 : simulationClock.Consume(frameSeconds);
         for (int step = 0; step < simulationSteps; ++step)
         {
             const double seconds = simulationClock.StepSeconds();
+            impactSoundCooldown = std::fmax(0.0, impactSoundCooldown - seconds);
             raceStart.Update(seconds);
-            if (raceStart.Started() && winner == 0)
+            if (raceStart.Started() && (winner == 0 || continueDriving))
             {
                 const RaceGate& simulationGate = race.Progress().mNextCheckpoint
                     < static_cast<int>(checkpoints.size())
@@ -1873,6 +3394,9 @@ int main()
                     playerInput = ApplyBrakingAssist(playerInput, hovercraft.State(), simulationGate);
                 hovercraft.Step(playerInput, seconds);
                 activeRecording.Record(playerInput);
+                if (weaponsAllowed && playerInput.mFire && !fireHeld && missile.Fire(hovercraft.State()))
+                    audioFeedback.PlayBoost();
+                fireHeld = playerInput.mFire;
                 if (ghostActive)
                 {
                     HovercraftInput ghostInput;
@@ -1881,7 +3405,7 @@ int main()
                         replayGhost.Step(ghostInput, seconds);
                         BounceOffCourseWall(replayGhost, course);
                         ApplyRaisedSections(replayGhost, raisedSections);
-                        ApplyBoostPads(replayGhost, boostPads);
+                        ApplyMines(replayGhost, mines);
                         ++ghostFrame;
                     }
                     else
@@ -1926,20 +3450,50 @@ int main()
                         Hovercraft& rival = rivals[rivalIndex];
                         BounceOffCourseWall(rival, course);
                         ApplyRaisedSections(rival, raisedSections);
-                        ApplyBoostPads(rival, boostPads);
+                        ApplyMines(rival, mines);
                         ApplyHazardZones(rival, hazardZones, seconds);
                     }
                 }
-                BounceOffCourseWall(hovercraft, course);
+                if (weaponsAllowed)
+                {
+                    missile.Step(seconds, course);
+                    HovercraftState playerState = hovercraft.State();
+                    if (missile.ApplyHit(playerState))
+                    {
+                        hovercraft.Reset(playerState);
+                        audioFeedback.PlayImpact();
+                    }
+                    for (int rivalIndex = 0; rivalIndex < kRivalCount; ++rivalIndex)
+                    {
+                        HovercraftState rivalState = rivals[rivalIndex].State();
+                        if (missile.ApplyHit(rivalState))
+                        {
+                            rivals[rivalIndex].Reset(rivalState);
+                            audioFeedback.PlayImpact();
+                        }
+                    }
+                }
+                if (BounceOffCourseWall(hovercraft, course) && impactSoundCooldown <= 0.0)
+                {
+                    audioFeedback.PlayImpact();
+                    impactSoundCooldown = 0.18;
+                }
                 ApplyRaisedSections(hovercraft, raisedSections);
-                ApplyBoostPads(hovercraft, boostPads);
+                if (ApplyMines(hovercraft, mines) && impactSoundCooldown <= 0.0)
+                {
+                    audioFeedback.PlayImpact();
+                    impactSoundCooldown = 0.18;
+                }
                 ApplyHazardZones(hovercraft, hazardZones, seconds);
             }
 
             const HovercraftState& simulationState = hovercraft.State();
             if (raceStart.Started() && winner == 0)
             {
+                const int previousCheckpoint = race.Progress().mNextCheckpoint;
                 race.Update(simulationState.mX, simulationState.mY, seconds);
+                if (race.Progress().mNextCheckpoint != previousCheckpoint)
+                    audioFeedback.PlayCheckpoint();
                 lapTimer.Update(race.Progress());
                 if (RaceModeUsesRivals(raceMode))
                 {
@@ -2055,8 +3609,8 @@ int main()
                               playerPosition, RaceModeUsesRivals(raceMode) ? rivalCount + 1 : 1);
         }
         else if (raceMode == RaceMode::Practice)
-            std::snprintf(title, sizeof(title), "OpenHover | %s | Practice | Speed %.1f | Boost %.0f%%",
-                          selectedTrack.mName.c_str(), state.mSpeed, state.mBoostEnergy * 100.0);
+            std::snprintf(title, sizeof(title), "OpenHover | %s | Practice | Speed %.1f",
+                          selectedTrack.mName.c_str(), state.mSpeed);
         else
         {
             const LapTiming& lapTiming = lapTimer.Timing();
@@ -2082,8 +3636,11 @@ int main()
         if (frontScreen != FrontScreen::RaceSetup)
         {
             DrawFrontScreen(frontScreen,
-                            frontScreen == FrontScreen::LocalSetup ? localSetupSelection : frontSelection,
-                            cameraDistanceSetting, trackIndex, targetLaps, weaponsAllowed,
+                            frontScreen == FrontScreen::LocalSetup ? localSetupSelection
+                                : (frontScreen == FrontScreen::Settings ? settingsSelection
+                                   : (frontScreen == FrontScreen::HostRaceSetup ? gHostSetupSelection : frontSelection)),
+                            cameraDistanceSetting, audioFeedback.Enabled(), trackIndex, targetLaps, rivalCount,
+                            rivalDifficulty, raceMode, weaponsAllowed,
                             drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;
@@ -2104,39 +3661,47 @@ int main()
         const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
         glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
         DrawCourseGrid(state);
-        DrawTrackLandmarks(courseWaypoints);
+        DrawTrackEnvironment(selectedTrack);
         DrawConnectedTrack(courseWaypoints, selectedTrack.mRoadHalfWidth,
                    selectedTrack.mRoadRed, selectedTrack.mRoadGreen, selectedTrack.mRoadBlue,
                    selectedTrack.mWallRed, selectedTrack.mWallGreen, selectedTrack.mWallBlue, roadTexture,
                    wallTexture);
         DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
-        for (const BoostPad& pad : boostPads)
-            DrawBoostPad(pad);
+        DrawCheckpointGates(courseWaypoints, checkpoints, race.Progress().mNextCheckpoint,
+                    selectedTrack.mRoadHalfWidth);
         for (const HazardZone& zone : hazardZones)
             DrawHazardZone(zone);
         for (const RaisedSection& section : raisedSections)
             DrawRaisedSection(section);
+        for (const Mine& mine : mines)
+            DrawMine(mine);
+        DrawMissile(missile);
 
         if (RaceModeUsesRivals(raceMode))
         {
-            for (const HovercraftState& rivalState : rivalStates)
-                DrawHovercraft(rivalState, true);
+            for (int rivalIndex = 0; rivalIndex < static_cast<int>(rivalStates.size()); ++rivalIndex)
+                DrawHovercraft(rivalStates[rivalIndex], true, false, CraftClass::Balanced, rivalIndex + 2);
         }
         if (ghostActive)
-            DrawHovercraft(replayGhost.State(), false, true, playerCraftClass);
-        DrawHovercraft(state, false, false, playerCraftClass);
+            DrawHovercraft(replayGhost.State(), false, true, playerCraftClass, 1);
+        DrawHovercraft(state, false, false, playerCraftClass, 1);
         std::vector<RaceProgress> rivalProgresses(raceProgresses.begin() + 1, raceProgresses.end());
         DrawHud(race.Progress(), race.TargetLaps(), rivalProgresses, state, rivalStates, activeGate,
             courseWaypoints,
-            RaceModeUsesRivals(raceMode), winner, playerPosition,
+            RaceModeUsesRivals(raceMode), wrongWay, winner, playerPosition,
             RaceModeUsesRivals(raceMode) ? rivalCount + 1 : 1,
             raceMode == RaceMode::Championship, raceStart.LightsLit(), raceStart.CountdownActive(),
-            championshipOverlayPoints, race.Progress().mElapsedSeconds, drawableWidth, drawableHeight);
+            !continueDriving,
+            championshipOverlayPoints, race.Progress().mElapsedSeconds, lapTimer.Timing(), missile,
+            weaponsAllowed, pauseMenuOpen, pauseMenuSelection,
+            resultSelection,
+            drawableWidth, drawableHeight);
         SDL_GL_SwapWindow(window);
     }
 
     if (controller != nullptr)
         SDL_GameControllerClose(controller);
+    audioFeedback.Shutdown();
     glDeleteTextures(1, &roadTexture);
     glDeleteTextures(1, &wallTexture);
     SDL_GL_DeleteContext(context);

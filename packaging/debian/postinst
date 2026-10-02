@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT OR Apache-2.0
+set -e
+
+if ! getent group openhover >/dev/null; then
+    addgroup --system openhover
+fi
+if ! getent passwd openhover >/dev/null; then
+    adduser --system --ingroup openhover --home /var/lib/openhover --no-create-home openhover
+fi
+install -d -o openhover -g openhover -m 0750 /var/lib/openhover
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable --now openhover-raceserver.service
+fi

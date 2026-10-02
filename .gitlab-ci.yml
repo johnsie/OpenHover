@@ -1,0 +1,32 @@
+stages:
+  - test
+  - package
+  - deploy
+
+build_and_test:
+  stage: test
+  script:
+    - cmake -S . -B build
+    - cmake --build build --parallel
+    - ctest --test-dir build --output-on-failure
+
+package_race_server:
+  stage: package
+  script:
+    - cmake -S . -B build-raceserver
+    - cmake --build build-raceserver --target OpenHoverServer --parallel
+    - cpack --config build-raceserver/CPackConfig.cmake --generator DEB
+  artifacts:
+    paths:
+      - build-raceserver/packages/*.deb
+    expire_in: 30 days
+
+deploy_race_server:
+  stage: deploy
+  needs:
+    - job: package_race_server
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - sudo -n ./scripts/install-race-server.sh build-raceserver/packages/*.deb

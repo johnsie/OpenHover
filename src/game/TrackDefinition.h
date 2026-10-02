@@ -4,6 +4,7 @@
 
 #include "BoostPad.h"
 #include "HazardZone.h"
+#include "Mine.h"
 #include "RaisedSection.h"
 #include "Race.h"
 
@@ -24,8 +25,10 @@ struct TrackDefinition
     std::string mName;
     TrackProvenance mProvenance;
     std::vector<RaceGate> mWaypoints;
+    std::vector<RaceGate> mCheckpoints;
     std::vector<BoostPad> mBoostPads;
     std::vector<HazardZone> mHazardZones;
+    std::vector<Mine> mMines;
     std::vector<RaisedSection> mRaisedSections;
     double mRoadHalfWidth = 5.0;
     float mAtmosphereRed = 0.14f;

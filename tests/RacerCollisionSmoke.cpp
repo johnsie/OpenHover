@@ -20,9 +20,10 @@ int main()
     const double deltaX = second.mX - first.mX;
     const double deltaY = second.mY - first.mY;
     if (std::fabs(std::sqrt(deltaX * deltaX + deltaY * deltaY) - 2.5) > 0.0001
-        || std::fabs(first.mSpeed - 7.0) > 0.0001 || std::fabs(second.mSpeed - 4.2) > 0.0001)
+        || std::fabs(first.mSpeed + second.mSpeed - 16.0) > 0.0001
+        || first.mSpeed >= 10.0 || second.mSpeed <= 6.0)
     {
-        std::cerr << "racer collision had the wrong separation or damping\n";
+        std::cerr << "racer collision had the wrong separation or momentum\n";
         return 1;
     }
 

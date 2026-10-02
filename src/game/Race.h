@@ -15,6 +15,7 @@ struct RaceProgress
 {
     int mNextCheckpoint = 0;
     int mCompletedLaps = 0;
+    double mSegmentProgress = 0.0;
     double mElapsedSeconds = 0.0;
     bool mFinished = false;
 };
@@ -38,6 +39,9 @@ private:
     int mTargetLaps;
     RaceProgress mProgress;
     bool mInsideActiveGate = false;
+    double mPreviousX = 0.0;
+    double mPreviousY = 0.0;
+    bool mHasPreviousPosition = false;
 };
 
 #endif

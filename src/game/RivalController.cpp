@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "RivalController.h"
+#include "RouteGuidance.h"
 
 #include <cmath>
 
@@ -58,14 +59,12 @@ RivalTuning TuneRivalForDifficulty(const RivalTuning& pBaseTuning, RivalDifficul
     case RivalDifficulty::Relaxed:
         tuning.mPace *= 0.82;
         tuning.mSteeringGain *= 0.82;
-        tuning.mBoostHeadingError *= 0.70;
-        tuning.mBoostDistanceMultiplier *= 1.45;
+        tuning.mCornerLookAheadDistance *= 0.6;
         break;
     case RivalDifficulty::Expert:
         tuning.mPace = Clamp(tuning.mPace + 0.08, 0.0, 1.0);
         tuning.mSteeringGain *= 1.12;
-        tuning.mBoostHeadingError *= 1.25;
-        tuning.mBoostDistanceMultiplier *= 0.75;
+        tuning.mCornerLookAheadDistance *= 1.8;
         break;
     case RivalDifficulty::Standard:
         break;
@@ -106,11 +105,25 @@ HovercraftInput RivalController::InputFor(const HovercraftState& pState) const
     const double deltaX = target.mX - pState.mX;
     const double deltaY = target.mY - pState.mY;
     const double distance = std::sqrt(deltaX * deltaX + deltaY * deltaY);
-    const double desiredHeading = std::atan2(deltaY, deltaX);
+    double aimX = target.mX;
+    double aimY = target.mY;
+    if (mRoute.size() > 1 && distance < mTuning.mCornerLookAheadDistance)
+    {
+        const RaceGate& nextTarget = mRoute[(mTargetIndex + 1) % mRoute.size()];
+        const double nextDeltaX = nextTarget.mX - target.mX;
+        const double nextDeltaY = nextTarget.mY - target.mY;
+        const double nextDistance = std::sqrt(nextDeltaX * nextDeltaX + nextDeltaY * nextDeltaY);
+        if (nextDistance > 0.0)
+        {
+            const double blend = Clamp(1.0 - distance / mTuning.mCornerLookAheadDistance, 0.0, 1.0);
+            const double lookAhead = std::fmin(mTuning.mCornerLookAheadDistance, nextDistance * 0.45);
+            aimX += nextDeltaX / nextDistance * lookAhead * blend;
+            aimY += nextDeltaY / nextDistance * lookAhead * blend;
+        }
+    }
+    const double desiredHeading = std::atan2(aimY - pState.mY, aimX - pState.mX);
     const double headingError = WrapAngle(desiredHeading - pState.mHeading);
     input.mThrottle = Clamp(mTuning.mPace, 0.0, 1.0);
     input.mSteering = Clamp(headingError * mTuning.mSteeringGain, -1.0, 1.0);
-    input.mBoost = std::fabs(headingError) < mTuning.mBoostHeadingError
-        && distance > target.mRadius * mTuning.mBoostDistanceMultiplier;
     return input;
 }

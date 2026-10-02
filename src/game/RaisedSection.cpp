@@ -83,3 +83,37 @@ bool ResolveRaisedSectionCollision(HovercraftState& pState, const RaisedSection&
     pState.mTravelHeading = std::atan2(bouncedY, bouncedX);
     return true;
 }
+
+bool LandOnRaisedSection(HovercraftState& pState, const RaisedSection& pSection,
+                         double pCraftRadius, double pHoverClearance,
+                         double pLandingTolerance)
+{
+    if (!pSection.mDriveable || pState.mVerticalSpeed > 0.0)
+        return false;
+
+    const double forwardX = std::cos(pSection.mHeading);
+    const double forwardY = std::sin(pSection.mHeading);
+    const double sideX = -forwardY;
+    const double sideY = forwardX;
+    const double deltaX = pState.mX - pSection.mX;
+    const double deltaY = pState.mY - pSection.mY;
+    const double localX = deltaX * forwardX + deltaY * forwardY;
+    const double localY = deltaX * sideX + deltaY * sideY;
+    const double radius = pCraftRadius > 0.0 ? pCraftRadius : 0.0;
+    const double limitX = pSection.mHalfLength - radius;
+    const double limitY = pSection.mHalfWidth - radius;
+    if (limitX <= 0.0 || limitY <= 0.0 || std::fabs(localX) > limitX
+        || std::fabs(localY) > limitY)
+    {
+        return false;
+    }
+
+    const double surfaceHeight = pSection.mClearHeight - 0.1 + pHoverClearance;
+    if (pState.mHeight < surfaceHeight - pLandingTolerance)
+        return false;
+    pState.mSurfaceHeight = surfaceHeight;
+    if (pState.mHeight < surfaceHeight)
+        pState.mHeight = surfaceHeight;
+    pState.mVerticalSpeed = 0.0;
+    return true;
+}

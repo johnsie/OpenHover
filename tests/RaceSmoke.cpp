@@ -31,6 +31,34 @@ int main()
         std::cerr << "ordered gates did not complete the race\n";
         return 1;
     }
+
+    Race overlappingRace({{10.0, 0.0, 3.0}, {12.0, 0.0, 3.0}}, {20.0, 0.0, 1.0}, 1);
+    overlappingRace.Update(10.0, 0.0, 1.0);
+    overlappingRace.Update(12.0, 0.0, 1.0);
+    if (overlappingRace.Progress().mNextCheckpoint != 2)
+    {
+        std::cerr << "overlapping checkpoints did not advance in order\n";
+        return 1;
+    }
+
+    Race crossingRace({{10.0, 0.0, 1.0}}, {0.0, 0.0, 1.0}, 1);
+    crossingRace.Update(0.0, 0.0, 1.0);
+    crossingRace.Update(12.0, 0.0, 1.0);
+    if (crossingRace.Progress().mNextCheckpoint != 1)
+    {
+        std::cerr << "crossing a checkpoint line without entering its circle did not register\n";
+        return 1;
+    }
+
+    Race finishFallbackRace({{10.0, 0.0, 1.0}}, {0.0, 0.0, 1.0}, 1);
+    finishFallbackRace.Update(0.0, 0.0, 1.0);
+    finishFallbackRace.Update(-2.0, 0.0, 1.0);
+    finishFallbackRace.Update(0.0, 0.0, 1.0);
+    if (finishFallbackRace.Progress().mFinished || finishFallbackRace.Progress().mCompletedLaps != 0)
+    {
+        std::cerr << "returning to finish without checkpoints completed a lap\n";
+        return 1;
+    }
     if (std::fabs(race.Progress().mElapsedSeconds - 7.0) > 0.0001)
     {
         std::cerr << "race clock did not track elapsed time\n";

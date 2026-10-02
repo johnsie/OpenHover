@@ -45,5 +45,22 @@ int main()
         std::cerr << "airborne craft could not clear raised section\n";
         return 1;
     }
+
+    RaisedSection platform = {0.0, 0.0, 8.0, 4.0, 0.0, 1.45, true};
+    state = HovercraftState();
+    state.mHeight = 1.8;
+    state.mVerticalSpeed = -2.0;
+    if (!LandOnRaisedSection(state, platform) || std::fabs(state.mHeight - 2.0) > 0.0001
+        || state.mVerticalSpeed != 0.0 || std::fabs(state.mSurfaceHeight - 2.0) > 0.0001)
+    {
+        std::cerr << "descending craft did not land on raised platform\n";
+        return 1;
+    }
+    state.mVerticalSpeed = 2.0;
+    if (LandOnRaisedSection(state, platform))
+    {
+        std::cerr << "rising craft landed on raised platform\n";
+        return 1;
+    }
     return 0;
 }

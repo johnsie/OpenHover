@@ -30,11 +30,14 @@ cmake -S . -B build && cmake --build build && ctest --test-dir build
 Run `./build/OpenHover` to drive the arena. Select **Play Local Game** from the main menu, choose
 the original track, lap count, and weapons setting, then select **Start Race**. A three-light
 countdown begins before the race. Use `W`/`S` or Shift/Down to accelerate and reverse, `A`/`D` or
-Left/Right to steer, Ctrl to boost, Up to jump, and Escape to quit. Boost energy recharges when
-not in use. A connected gamepad uses its left stick to steer, triggers to accelerate and brake,
-A to boost, and B to jump. Pass checkpoints in order, then cross the finish zone to complete a
+Left/Right to steer, Up to jump, Ctrl to fire a missile when weapons are allowed, and Escape to quit.
+Missiles retain their firing height, bounce off course walls, and spin out any craft they hit,
+including the player. A connected gamepad uses its left stick to steer, triggers to accelerate and
+brake, B to jump, and X to fire.
+Pass checkpoints in order, then cross the finish zone to complete a
 lap. Complete the selected number of laps to finish; press `R` to restart. The rivals follow the
-same course; the first craft to finish wins.
+same course; the first craft to finish wins. Procedural audio cues confirm menu actions, impacts,
+and checkpoints when an audio device is available; toggle them in **Settings**.
 
 ## Process
 

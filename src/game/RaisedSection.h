@@ -12,9 +12,13 @@ struct RaisedSection
     double mHalfWidth = 4.0;
     double mHeading = 0.0;
     double mClearHeight = 1.6;
+    bool mDriveable = false;
 };
 
 bool ResolveRaisedSectionCollision(HovercraftState& pState, const RaisedSection& pSection,
                                    double pCraftRadius = 0.9, double pRestitution = 0.8);
+bool LandOnRaisedSection(HovercraftState& pState, const RaisedSection& pSection,
+                         double pCraftRadius = 0.9, double pHoverClearance = 0.65,
+                         double pLandingTolerance = 0.35);
 
 #endif

@@ -34,18 +34,22 @@ Everything is recorded in `PROVENANCE.md` **in the same commit that adds it**.
   one chosen for OpenHover.
 - Names, logos, or artwork that identify the licensed project.
 
-## 3. Rebuilding what the original did
+## 3. Researching and rebuilding behaviour
 
-The game's behaviour is described by **what it does**, not how its source is written.
+The game's behaviour is described by what players can observe. Public implementation research
+may inform high-level design decisions, but it must not be used as implementation material.
 
 - Describe behaviour from playing it and from black-box measurements: recorded inputs and
   the outcomes they produce, speeds, timings, and rules a player can observe.
-- Write each requirement as a test (an input recording and an expected result) before
-  writing the code that satisfies it. The old game is an oracle for those tests, never a
-  source of code.
-- Do not read, paste, translate, or port the licensed source while writing a replacement.
-  Where a stricter separation is needed (one person documents behaviour, another
-  implements it), record who did which.
+- Public source may be consulted only for high-level design research after its licence is
+  checked. Record the repository, revision, licence, files consulted, and the design question
+  in `PROVENANCE.md` before relying on the research.
+- Do not copy, translate, paraphrase, or port source code, identifiers, tests, comments,
+  data formats, track data, assets, or file structure. Write OpenHover code and tests from
+  independently stated behaviour and design requirements.
+- Write each implementation requirement and an original test before writing the code that
+  satisfies it. Where a stricter separation is needed, record who researched, specified, and
+  implemented the feature.
 
 ## 4. New assets
 

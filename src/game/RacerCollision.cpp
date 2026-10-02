@@ -6,6 +6,14 @@
 namespace
 {
 const double kRacerClearanceHeight = 0.35;
+const double kRacerRestitution = 0.35;
+
+void ApplyVelocity(HovercraftState& pState, double pVelocityX, double pVelocityY)
+{
+    pState.mSpeed = std::sqrt(pVelocityX * pVelocityX + pVelocityY * pVelocityY);
+    if (pState.mSpeed > 0.0)
+        pState.mTravelHeading = std::atan2(pVelocityY, pVelocityX);
+}
 }
 
 bool ResolveRacerCollision(HovercraftState& pFirst, HovercraftState& pSecond, double pRadius)
@@ -40,7 +48,18 @@ bool ResolveRacerCollision(HovercraftState& pFirst, HovercraftState& pSecond, do
     pFirst.mY -= deltaY * separation;
     pSecond.mX += deltaX * separation;
     pSecond.mY += deltaY * separation;
-    pFirst.mSpeed *= 0.7;
-    pSecond.mSpeed *= 0.7;
+
+    const double firstVelocityX = std::cos(pFirst.mTravelHeading) * pFirst.mSpeed;
+    const double firstVelocityY = std::sin(pFirst.mTravelHeading) * pFirst.mSpeed;
+    const double secondVelocityX = std::cos(pSecond.mTravelHeading) * pSecond.mSpeed;
+    const double secondVelocityY = std::sin(pSecond.mTravelHeading) * pSecond.mSpeed;
+    const double relativeNormalSpeed = (secondVelocityX - firstVelocityX) * deltaX
+        + (secondVelocityY - firstVelocityY) * deltaY;
+    if (relativeNormalSpeed < 0.0)
+    {
+        const double impulse = -(1.0 + kRacerRestitution) * relativeNormalSpeed * 0.5;
+        ApplyVelocity(pFirst, firstVelocityX - impulse * deltaX, firstVelocityY - impulse * deltaY);
+        ApplyVelocity(pSecond, secondVelocityX + impulse * deltaX, secondVelocityY + impulse * deltaY);
+    }
     return true;
 }

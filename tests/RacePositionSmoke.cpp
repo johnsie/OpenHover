@@ -25,6 +25,18 @@ int main()
         return 1;
     }
 
+    progresses.assign(3, RaceProgress());
+    progresses[0].mSegmentProgress = 0.75;
+    progresses[1].mSegmentProgress = 0.35;
+    progresses[2].mSegmentProgress = 0.12;
+    if (CalculateRacePosition(progresses, 0) != 1
+        || CalculateRacePosition(progresses, 1) != 2
+        || CalculateRacePosition(progresses, 2) != 3)
+    {
+        std::cerr << "race positions did not respect current segment progress\n";
+        return 1;
+    }
+
     progresses[1].mFinished = true;
     if (CalculateRacePosition(progresses, 1) != 1)
     {

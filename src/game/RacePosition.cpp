@@ -21,6 +21,8 @@ int CalculateRacePosition(const std::vector<RaceProgress>& pProgresses, int pRac
             return left.mCompletedLaps > right.mCompletedLaps;
         if (left.mNextCheckpoint != right.mNextCheckpoint)
             return left.mNextCheckpoint > right.mNextCheckpoint;
+        if (left.mSegmentProgress != right.mSegmentProgress)
+            return left.mSegmentProgress > right.mSegmentProgress;
         if (left.mElapsedSeconds != right.mElapsedSeconds)
             return left.mElapsedSeconds < right.mElapsedSeconds;
         return pLeft < pRight;
