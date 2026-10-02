@@ -4,9 +4,9 @@
 #include <cmath>
 
 bool RecoverHovercraftToRoute(HovercraftState& pState, const Course& pCourse,
-                              const RaceGate& pTarget)
+                              const RaceGate& pTarget, bool pForce)
 {
-    if (pCourse.IsOnRoad(pState.mX, pState.mY))
+    if (!pForce && pCourse.IsOnRoad(pState.mX, pState.mY))
         return false;
 
     double routeX = pState.mX;

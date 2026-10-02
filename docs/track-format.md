@@ -55,3 +55,24 @@ list. They are not available in championships. To race one online, host a room w
 room carries the track and other players download it automatically; see
 [multiplayer](multiplayer.md#custom-tracks-online). Tracks downloaded that way are saved in
 `tracks/downloaded` and appear in your own track list.
+
+## Track editor
+
+The main menu's **Track Editor** builds a track without writing a file. Click the map to add corner
+points in driving order (the grid snaps to 10 units); drag a point to move it; right click a point
+to delete it; Backspace or **Undo Point** removes the last one. **Narrower** and **Wider** change the
+road. Click the **Name** button to type a name (letters, digits, space, `.`, `_`, `-`, up to 24).
+
+From the points, the editor builds a complete track exactly as a hand-written one would be, then
+validates it with the normal rules: it starts the lap at the middle of the longest side so the grid
+has a straight to sit on, picks four corners spread around the lap as checkpoints, adds a driveable
+bridge where two roads cross (crossings shallower than 25 degrees are refused), and places boost
+pads in the middle of straights longer than 80 units. The status line shows whether the track is
+valid, its length, and a rough lap time at about 30 m/s; the green square is the start, yellow
+squares are checkpoints, orange squares are bridges, and blue dots are pads.
+
+**Save Track** writes `<id>.ohtrack` to the `tracks` folder and adds the track to the local race
+list immediately. The id comes from the name, and a name that is already used by another track is
+refused. **Save and Drive** does the same and then starts a local race on the track so you can try
+it; pause and choose Main Menu to return, and the editor keeps your points. Saving again after
+more edits replaces the track you saved before.

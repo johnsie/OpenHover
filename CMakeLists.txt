@@ -32,7 +32,7 @@ add_library(openhover_content STATIC src/content/TrackCatalog.cpp src/content/Tr
 target_include_directories(openhover_content PUBLIC src/content)
 target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 
-add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/TrackFile.cpp src/game/TrackHash.cpp src/game/TrackLoader.cpp src/game/WallCollision.cpp)
+add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/RouteTracker.cpp src/game/SteeringAssist.cpp src/game/StallDetector.cpp src/game/TrackBuilder.cpp src/game/TrackDefinition.cpp src/game/TrackFile.cpp src/game/TrackHash.cpp src/game/TrackLoader.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
 target_link_libraries(openhover_game PUBLIC openhover_util)
 
@@ -126,6 +126,18 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(SteeringAssistSmoke tests/SteeringAssistSmoke.cpp)
     target_link_libraries(SteeringAssistSmoke PRIVATE openhover_game)
     add_test(NAME SteeringAssistSmoke COMMAND SteeringAssistSmoke)
+
+    add_executable(StallDetectorSmoke tests/StallDetectorSmoke.cpp)
+    target_link_libraries(StallDetectorSmoke PRIVATE openhover_game)
+    add_test(NAME StallDetectorSmoke COMMAND StallDetectorSmoke)
+
+    add_executable(RouteTrackerSmoke tests/RouteTrackerSmoke.cpp)
+    target_link_libraries(RouteTrackerSmoke PRIVATE openhover_game)
+    add_test(NAME RouteTrackerSmoke COMMAND RouteTrackerSmoke)
+
+    add_executable(TrackBuilderSmoke tests/TrackBuilderSmoke.cpp)
+    target_link_libraries(TrackBuilderSmoke PRIVATE openhover_lobby)
+    add_test(NAME TrackBuilderSmoke COMMAND TrackBuilderSmoke)
 
     add_executable(TrackHashSmoke tests/TrackHashSmoke.cpp)
     target_link_libraries(TrackHashSmoke PRIVATE openhover_game)

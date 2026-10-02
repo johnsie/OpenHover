@@ -3,6 +3,30 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.17
+
+- AI rivals now use weapons: on Standard and Expert difficulty a rival fires a missile at any craft
+  lined up ahead of it within about 55 metres, whether that is you or another rival (Relaxed
+  rivals never fire). Missiles recharge as usual, and nothing changes when weapons are off. This
+  applies to local and online races alike.
+- AI rivals now recover on their own. A rival that stays stuck in one place for three seconds, for
+  example wedged against a wall after a collision or a missile hit, puts itself back on the road
+  facing the right way. Previously such a rival could sit there for twenty seconds or more.
+- While a ghost races alongside you, the HUD shows how far you are ahead of or behind it along the
+  road, for example "12 M AHEAD OF GHOST" (green) or "40 M BEHIND GHOST" (orange). It follows the
+  road across laps and at bridges, so it never jumps where two roads cross.
+- **Alt** now cycles the ghost between your best run, your last run (this session, on the same
+  track and craft), and off, and shows which is active; the choice is saved. Best and last switch
+  at the next race start, off takes effect at once. The results panel names the ghost you raced.
+- New **Track Editor** on the main menu. Click on the map to place corner points (drag to move, right
+  click to delete, Backspace or Undo to remove the last one). The editor turns your points into a
+  complete track as you go: a start straight on the longest side, four checkpoints, a bridge at
+  every crossing, and boost pads on long straights, and it shows the result, an estimated lap
+  time, and any problem (for example "ADD AT LEAST 5 POINTS") live. Pick a name and road width and
+  press Save; the track appears in Play Local Game and can be hosted online like any other custom
+  track. See [track format](track-format.md#track-editor). **Save and Drive** saves the track and
+  starts a local race on it at once; saving again after more edits replaces your earlier version.
+
 ## 0.1.16
 
 - Online custom tracks now travel with the room. A host picks any of their tracks when creating a

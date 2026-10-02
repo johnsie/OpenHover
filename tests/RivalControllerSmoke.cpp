@@ -100,6 +100,33 @@ int main()
         return 1;
     }
 
+    // Firing: a craft lined up ahead within range draws a missile; nothing else does.
+    HovercraftState target;
+    target.mX = 25.0;
+    target.mY = 0.5;
+    HovercraftState offLane = target;
+    offLane.mY = 6.0;
+    HovercraftState tooFar = target;
+    tooFar.mX = 200.0;
+    HovercraftState tooClose = target;
+    tooClose.mX = 3.0;
+    HovercraftState behindUs = target;
+    behindUs.mX = -25.0;
+    if (!racer.InputFor(self, {target}).mFire || racer.InputFor(self, {offLane}).mFire
+        || racer.InputFor(self, {tooFar}).mFire || racer.InputFor(self, {tooClose}).mFire
+        || racer.InputFor(self, {behindUs}).mFire || racer.InputFor(self).mFire)
+    {
+        std::cerr << "rival did not fire only at a craft lined up ahead\n";
+        return 1;
+    }
+    RivalController relaxed(straight, TuneRivalForDifficulty(RivalTuning(), RivalDifficulty::Relaxed));
+    RivalController expert(straight, TuneRivalForDifficulty(RivalTuning(), RivalDifficulty::Expert));
+    if (relaxed.InputFor(self, {target}).mFire || !expert.InputFor(self, {target}).mFire)
+    {
+        std::cerr << "relaxed rivals must not fire, and expert rivals must\n";
+        return 1;
+    }
+
     // Driving past a parked craft in the middle of a wide road without touching it.
     std::vector<RaceGate> longRoad = {{300.0, 0.0, 3.0}, {600.0, 0.0, 3.0}};
     RivalController passer(longRoad);

@@ -82,6 +82,71 @@ int main()
         std::cerr << "authoritative race did not create configured AI rivals\n";
         return 1;
     }
+    // An AI rival lined up behind a parked player shoots it: the player is spun out at some point
+    // in the first twenty seconds of racing, and the missile is replicated like any other.
+    {
+        AuthoritativeRace shooting;
+        if (!shooting.Start({11}, 0, 3, true, 3, RaceMode::SingleRace))
+        {
+            std::cerr << "authoritative race did not start the AI weapons scenario\n";
+            return 1;
+        }
+        bool playerSpunOut = false;
+        bool aiMissileSeen = false;
+        for (int step = 0; step < 120 * 28 && !(playerSpunOut && aiMissileSeen); ++step)
+        {
+            shooting.Step();
+            const RaceSnapshot snapshot = shooting.Snapshot();
+            for (const RaceMissileSnapshot& missile : snapshot.mMissiles)
+                aiMissileSeen = aiMissileSeen || missile.mPlayerId >= 1000000;
+            playerSpunOut = playerSpunOut || snapshot.mRacers[0].mState.mSpinOutSeconds > 0.0;
+        }
+        if (!aiMissileSeen)
+        {
+            std::cerr << "no AI rival fired a missile at the parked player\n";
+            return 1;
+        }
+        if (!playerSpunOut)
+        {
+            std::cerr << "an AI missile never hit the parked player\n";
+            return 1;
+        }
+        AuthoritativeRace peaceful;
+        peaceful.Start({11}, 0, 3, false, 3, RaceMode::SingleRace);
+        for (int step = 0; step < 120 * 28; ++step)
+        {
+            peaceful.Step();
+            if (!peaceful.Snapshot().mMissiles.empty())
+            {
+                std::cerr << "missiles appeared in a race with weapons off\n";
+                return 1;
+            }
+        }
+    }
+    // With weapons on, rivals shoot each other and the player, yet none may end up stuck: a full
+    // grid of seven rivals finishes one lap of every track well inside two minutes.
+    for (int track = 0; track < 3; ++track)
+    {
+        for (int attempt = 0; attempt < 3; ++attempt)
+        {
+            AuthoritativeRace grid;
+            grid.Start({11}, track, 1, true, 7, RaceMode::SingleRace);
+            for (int step = 0; step < 120 * 110; ++step)
+                grid.Step();
+            int finished = 0;
+            for (const RaceRacerSnapshot& racer : grid.Snapshot().mRacers)
+            {
+                if (racer.mPlayerId >= 1000000 && racer.mProgress.mFinished)
+                    ++finished;
+            }
+            if (finished != 7)
+            {
+                std::cerr << "only " << finished << " of 7 rivals finished track " << track
+                          << " with weapons on\n";
+                return 1;
+            }
+        }
+    }
     for (int attempt = 0; attempt < 50; ++attempt)
     {
         AuthoritativeRace fullGrid;

@@ -12,6 +12,9 @@ const double kAvoidanceLane = 4.2;
 const double kAvoidanceAlongsideBehind = 1.0;
 const double kAvoidanceAlongsideLane = 3.0;
 const double kAvoidanceBrakeDistance = 6.0;
+const double kFireMinimumRange = 8.0;
+const double kFireMaximumRange = 55.0;
+const double kFireLane = 2.0;
 
 const double kPi = 3.14159265358979323846;
 
@@ -67,6 +70,7 @@ RivalTuning TuneRivalForDifficulty(const RivalTuning& pBaseTuning, RivalDifficul
         tuning.mPace *= 0.82;
         tuning.mSteeringGain *= 0.82;
         tuning.mCornerLookAheadDistance *= 0.6;
+        tuning.mFiresMissiles = false;
         break;
     case RivalDifficulty::Expert:
         tuning.mPace = Clamp(tuning.mPace + 0.08, 0.0, 1.0);
@@ -175,5 +179,23 @@ HovercraftInput RivalController::InputFor(const HovercraftState& pState,
             input.mThrottle *= 0.85;
     }
     input.mSteering = Clamp(steering, -1.0, 1.0);
+
+    // Fire when a craft is lined up straight ahead, close enough to hit but not so close that the
+    // missile would spawn on top of it. The missile's own recharge limits how often this happens.
+    if (mTuning.mFiresMissiles)
+    {
+        for (const HovercraftState& other : pOthers)
+        {
+            const double relativeX = other.mX - pState.mX;
+            const double relativeY = other.mY - pState.mY;
+            const double ahead = relativeX * forwardX + relativeY * forwardY;
+            const double side = forwardX * relativeY - forwardY * relativeX;
+            if (ahead >= kFireMinimumRange && ahead <= kFireMaximumRange && std::fabs(side) <= kFireLane)
+            {
+                input.mFire = true;
+                break;
+            }
+        }
+    }
     return input;
 }

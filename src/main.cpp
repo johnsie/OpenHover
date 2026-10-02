@@ -29,8 +29,11 @@
 #include "ReconnectPolicy.h"
 #include "RivalController.h"
 #include "RivalNames.h"
+#include "RouteTracker.h"
+#include "StallDetector.h"
 #include "RouteGuidance.h"
 #include "SteeringAssist.h"
+#include "TrackBuilder.h"
 #include "TrackDefinition.h"
 #include "TrackFile.h"
 #include "TrackHash.h"
@@ -64,7 +67,8 @@ enum class FrontScreen
     HowToPlay,
     Settings,
     LocalSetup,
-    RaceSetup
+    RaceSetup,
+    TrackEditor
 };
 
 struct LobbyRoomView
@@ -2284,7 +2288,26 @@ std::string HostTrackName(int pIndex)
     return LocalTrackName(pIndex);
 }
 bool gNewGhostBest = false;
-bool gGhostVisible = true;
+// Which ghost races alongside the player: 0 off, 1 best completed run, 2 last completed run.
+int gGhostMode = 1;
+// The last completed run (without recovery) for the track and craft class it was driven on.
+struct LastRun
+{
+    std::string mTrackId;
+    int mCraftClass = -1;
+    double mSeconds = 0.0;
+    InputRecording mRecording;
+};
+LastRun gLastRun;
+// Which kind of ghost this race loaded ("BEST" or "LAST"), for the results panel.
+std::string gGhostSourceLabel = "BEST";
+// A short on-screen note naming the ghost after the player changes it.
+std::string gGhostToast;
+Uint32 gGhostToastUntil = 0;
+// How far the player is ahead of (positive) or behind (negative) the ghost along the road, in
+// metres, while a ghost is racing alongside.
+bool gGhostGapShown = false;
+double gGhostGapMeters = 0.0;
 double gGhostSecondsBeforeRace = 0.0; // best ghost time when this race began, 0 if none
 GhostLibrary gGhostLibrary;
 // Name pool index for each local rival slot, redrawn at every race start so no two rivals share
@@ -2377,9 +2400,10 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
         {
             const int ghostSeconds = static_cast<int>(gGhostSecondsBeforeRace + 0.5);
             char ghostLine[40];
-            std::snprintf(ghostLine, sizeof(ghostLine), "%s %d M %d S",
-                          gNewGhostBest ? "GHOST WAS" : "GHOST BEST", ghostSeconds / 60,
-                          ghostSeconds % 60);
+            const std::string ghostLabel = gNewGhostBest ? std::string("GHOST WAS")
+                                                         : "GHOST " + gGhostSourceLabel;
+            std::snprintf(ghostLine, sizeof(ghostLine), "%s %d M %d S", ghostLabel.c_str(),
+                          ghostSeconds / 60, ghostSeconds % 60);
             glColor3f(0.82f, 0.9f, 0.92f);
             DrawPixelText(ghostLine, left + 110, top + 248, 2);
         }
@@ -2819,6 +2843,298 @@ void DrawTrackMinimap(int pTrackIndex, int pLeft, int pTop, int pSize)
     glEnd();
 }
 
+// ---- Track editor -------------------------------------------------------------------------
+// A top-down canvas where the player places corner points; the builder turns them into a valid
+// track (start straight, checkpoints, bridges, pads) and the screen shows the result live.
+struct TrackEditorState
+{
+    std::vector<EditorPoint> mPoints;
+    double mHalfWidth = 8.0;
+    int mDragIndex = -1;
+    bool mNaming = false;
+    std::string mName = "My Track";
+    std::string mStatus;
+    BuiltTrack mBuilt;
+    // Index in gLocalTracks of the track this editor last saved, so saving again after more edits
+    // replaces it instead of being refused as a duplicate name.
+    int mSavedIndex = -1;
+};
+TrackEditorState gEditor;
+constexpr double kEditorWorldHalf = 600.0;
+constexpr double kEditorGrid = 10.0;
+constexpr std::size_t kEditorMaximumPoints = 64;
+
+struct EditorLayout
+{
+    int mCanvasLeft = 24;
+    int mCanvasTop = 70;
+    int mCanvasSize = 500;
+    int mPanelLeft = 540;
+    int mPanelWidth = 240;
+};
+
+EditorLayout ComputeEditorLayout(int pWidth, int pHeight)
+{
+    EditorLayout layout;
+    layout.mCanvasSize = std::max(300, std::min(pHeight - 170, pWidth - 330));
+    layout.mPanelLeft = layout.mCanvasLeft + layout.mCanvasSize + 20;
+    layout.mPanelWidth = std::max(200, pWidth - layout.mPanelLeft - 24);
+    return layout;
+}
+
+int EditorScreenX(const EditorLayout& pLayout, double pWorldX)
+{
+    return pLayout.mCanvasLeft + static_cast<int>((pWorldX + kEditorWorldHalf) / (2.0 * kEditorWorldHalf)
+                                                  * pLayout.mCanvasSize);
+}
+
+int EditorScreenY(const EditorLayout& pLayout, double pWorldY)
+{
+    return pLayout.mCanvasTop + pLayout.mCanvasSize
+        - static_cast<int>((pWorldY + kEditorWorldHalf) / (2.0 * kEditorWorldHalf) * pLayout.mCanvasSize);
+}
+
+double EditorWorldX(const EditorLayout& pLayout, int pScreenX)
+{
+    return (pScreenX - pLayout.mCanvasLeft) * 2.0 * kEditorWorldHalf / pLayout.mCanvasSize - kEditorWorldHalf;
+}
+
+double EditorWorldY(const EditorLayout& pLayout, int pScreenY)
+{
+    return (pLayout.mCanvasTop + pLayout.mCanvasSize - pScreenY) * 2.0 * kEditorWorldHalf
+        / pLayout.mCanvasSize - kEditorWorldHalf;
+}
+
+double EditorSnap(double pValue)
+{
+    const double snapped = std::floor(pValue / kEditorGrid + 0.5) * kEditorGrid;
+    return std::max(-kEditorWorldHalf + 20.0, std::min(kEditorWorldHalf - 20.0, snapped));
+}
+
+void RefreshEditorBuild()
+{
+    gEditor.mBuilt = BuildTrackFromPoints(gEditor.mName, gPlayerDisplayName, gEditor.mPoints, gEditor.mHalfWidth);
+}
+
+// Buttons down the right-hand panel, top to bottom.
+enum EditorButton
+{
+    kEditorName,
+    kEditorNarrower,
+    kEditorWider,
+    kEditorUndo,
+    kEditorClear,
+    kEditorSave,
+    kEditorDrive,
+    kEditorBack,
+    kEditorButtonCount
+};
+
+void EditorButtonRect(const EditorLayout& pLayout, int pButton, int& pLeft, int& pTop, int& pWidth, int& pHeight)
+{
+    pLeft = pLayout.mPanelLeft;
+    pWidth = pLayout.mPanelWidth;
+    pHeight = 38;
+    pTop = pLayout.mCanvasTop + 4 + pButton * 46;
+    if (pButton == kEditorNarrower || pButton == kEditorWider)
+    {
+        pWidth = (pLayout.mPanelWidth - 8) / 2;
+        if (pButton == kEditorWider)
+            pLeft += pWidth + 8;
+        pTop = pLayout.mCanvasTop + 4 + kEditorNarrower * 46;
+    }
+    else if (pButton > kEditorWider)
+        pTop = pLayout.mCanvasTop + 4 + (pButton - 1) * 46;
+}
+
+void DrawTrackEditor(int pWidth, int pHeight)
+{
+    const EditorLayout layout = ComputeEditorLayout(pWidth, pHeight);
+    glColor3f(0.075f, 0.075f, 0.095f);
+    glBegin(GL_QUADS);
+    glVertex2i(0, 0);
+    glVertex2i(pWidth, 0);
+    glVertex2i(pWidth, pHeight);
+    glVertex2i(0, pHeight);
+    glEnd();
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText("TRACK EDITOR", 24, 24, 3);
+    glColor3f(0.72f, 0.78f, 0.82f);
+    DrawPixelText("CLICK ADD POINT  DRAG MOVE  RIGHT CLICK DELETE", 270, 30, 2);
+
+    // Canvas and grid.
+    glColor3f(0.03f, 0.05f, 0.07f);
+    glBegin(GL_QUADS);
+    glVertex2i(layout.mCanvasLeft, layout.mCanvasTop);
+    glVertex2i(layout.mCanvasLeft + layout.mCanvasSize, layout.mCanvasTop);
+    glVertex2i(layout.mCanvasLeft + layout.mCanvasSize, layout.mCanvasTop + layout.mCanvasSize);
+    glVertex2i(layout.mCanvasLeft, layout.mCanvasTop + layout.mCanvasSize);
+    glEnd();
+    glColor3f(0.1f, 0.16f, 0.2f);
+    glBegin(GL_LINES);
+    for (int line = -500; line <= 500; line += 100)
+    {
+        glVertex2i(EditorScreenX(layout, line), layout.mCanvasTop);
+        glVertex2i(EditorScreenX(layout, line), layout.mCanvasTop + layout.mCanvasSize);
+        glVertex2i(layout.mCanvasLeft, EditorScreenY(layout, line));
+        glVertex2i(layout.mCanvasLeft + layout.mCanvasSize, EditorScreenY(layout, line));
+    }
+    glEnd();
+
+    // The player's own loop.
+    const std::vector<EditorPoint>& points = gEditor.mPoints;
+    glColor3f(0.3f, 0.5f, 0.56f);
+    glBegin(GL_LINE_STRIP);
+    for (const EditorPoint& point : points)
+        glVertex2i(EditorScreenX(layout, point.mX), EditorScreenY(layout, point.mY));
+    glEnd();
+    if (points.size() >= 3)
+    {
+        glColor3f(0.16f, 0.26f, 0.3f);
+        glBegin(GL_LINES);
+        glVertex2i(EditorScreenX(layout, points.back().mX), EditorScreenY(layout, points.back().mY));
+        glVertex2i(EditorScreenX(layout, points.front().mX), EditorScreenY(layout, points.front().mY));
+        glEnd();
+    }
+
+    // What the builder made of it: the real route, checkpoints, bridges and pads.
+    if (gEditor.mBuilt.mOk)
+    {
+        const TrackDefinition& track = gEditor.mBuilt.mTrack;
+        glColor3f(0.2f, 0.9f, 1.0f);
+        glBegin(GL_LINE_LOOP);
+        for (const RaceGate& gate : track.mWaypoints)
+            glVertex2i(EditorScreenX(layout, gate.mX), EditorScreenY(layout, gate.mY));
+        glEnd();
+        const auto marker = [&](double pX, double pY, int pHalf)
+        {
+            const int x = EditorScreenX(layout, pX);
+            const int y = EditorScreenY(layout, pY);
+            glBegin(GL_QUADS);
+            glVertex2i(x - pHalf, y - pHalf);
+            glVertex2i(x + pHalf, y - pHalf);
+            glVertex2i(x + pHalf, y + pHalf);
+            glVertex2i(x - pHalf, y + pHalf);
+            glEnd();
+        };
+        glColor3f(1.0f, 0.86f, 0.1f);
+        for (const RaceGate& gate : track.mCheckpoints)
+            marker(gate.mX, gate.mY, 5);
+        glColor3f(0.4f, 0.8f, 1.0f);
+        for (const BoostPad& pad : track.mBoostPads)
+            marker(pad.mX, pad.mY, 3);
+        glColor3f(1.0f, 0.5f, 0.15f);
+        for (const RaisedSection& section : track.mRaisedSections)
+            marker(section.mX, section.mY, 6);
+        glColor3f(0.2f, 1.0f, 0.4f);
+        marker(track.mWaypoints.front().mX, track.mWaypoints.front().mY, 7);
+    }
+    for (std::size_t index = 0; index < points.size(); ++index)
+    {
+        const bool dragged = static_cast<int>(index) == gEditor.mDragIndex;
+        glColor3f(dragged ? 1.0f : (index == 0 ? 0.2f : 0.95f), dragged ? 0.86f : (index == 0 ? 1.0f : 0.95f),
+                  dragged ? 0.1f : (index == 0 ? 0.4f : 0.95f));
+        const int x = EditorScreenX(layout, points[index].mX);
+        const int y = EditorScreenY(layout, points[index].mY);
+        glBegin(GL_QUADS);
+        glVertex2i(x - 4, y - 4);
+        glVertex2i(x + 4, y - 4);
+        glVertex2i(x + 4, y + 4);
+        glVertex2i(x - 4, y + 4);
+        glEnd();
+    }
+
+    // Status line under the canvas.
+    char statusLine[96];
+    if (gEditor.mBuilt.mOk)
+    {
+        double length = 0.0;
+        const std::vector<RaceGate>& route = gEditor.mBuilt.mTrack.mWaypoints;
+        for (std::size_t index = 0; index < route.size(); ++index)
+        {
+            const RaceGate& next = route[(index + 1) % route.size()];
+            length += std::hypot(next.mX - route[index].mX, next.mY - route[index].mY);
+        }
+        // Cars cruise at roughly 30 m/s, so this is a rough guide to lap time.
+        std::snprintf(statusLine, sizeof(statusLine), "TRACK OK  %d POINTS  ABOUT %d M  %d S A LAP",
+                      static_cast<int>(points.size()), static_cast<int>(length),
+                      static_cast<int>(length / 30.0 + 0.5));
+        glColor3f(0.18f, 0.96f, 0.4f);
+    }
+    else
+    {
+        std::snprintf(statusLine, sizeof(statusLine), "%s", gEditor.mBuilt.mProblem.c_str());
+        glColor3f(1.0f, 0.4f, 0.3f);
+    }
+    DrawPixelText(statusLine, layout.mCanvasLeft, layout.mCanvasTop + layout.mCanvasSize + 12, 2);
+    if (!gEditor.mStatus.empty())
+    {
+        glColor3f(1.0f, 0.86f, 0.1f);
+        DrawPixelText(gEditor.mStatus.c_str(), layout.mCanvasLeft, layout.mCanvasTop + layout.mCanvasSize + 40, 2);
+    }
+    glColor3f(0.55f, 0.62f, 0.66f);
+    DrawPixelText("GREEN START  YELLOW CHECKPOINT  ORANGE BRIDGE  BLUE PAD", layout.mCanvasLeft,
+                  layout.mCanvasTop + layout.mCanvasSize + 68, 2);
+
+    // Buttons.
+    for (int button = 0; button < kEditorButtonCount; ++button)
+    {
+        int left = 0;
+        int top = 0;
+        int width = 0;
+        int height = 0;
+        EditorButtonRect(layout, button, left, top, width, height);
+        const bool active = button == kEditorName && gEditor.mNaming;
+        glColor3f(active ? 0.12f : 0.14f, active ? 0.52f : 0.2f, active ? 0.62f : 0.28f);
+        glBegin(GL_QUADS);
+        glVertex2i(left, top);
+        glVertex2i(left + width, top);
+        glVertex2i(left + width, top + height);
+        glVertex2i(left, top + height);
+        glEnd();
+        std::string label;
+        switch (button)
+        {
+        case kEditorName:
+            label = "NAME " + gEditor.mName + (active ? "_" : "");
+            break;
+        case kEditorNarrower:
+            label = "NARROWER";
+            break;
+        case kEditorWider:
+            label = "WIDER";
+            break;
+        case kEditorUndo:
+            label = "UNDO POINT";
+            break;
+        case kEditorClear:
+            label = "CLEAR";
+            break;
+        case kEditorSave:
+            label = "SAVE TRACK";
+            break;
+        case kEditorDrive:
+            label = "SAVE AND DRIVE";
+            break;
+        default:
+            label = "BACK";
+            break;
+        }
+        for (char& c : label)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const bool saveButton = button == kEditorSave || button == kEditorDrive;
+        glColor3f(saveButton && gEditor.mBuilt.mOk ? 0.4f : 0.9f,
+                  saveButton && gEditor.mBuilt.mOk ? 1.0f : 0.92f,
+                  saveButton && gEditor.mBuilt.mOk ? 0.5f : 0.95f);
+        const int scale = (label.size() * 12 > static_cast<std::size_t>(width - 12)) ? 1 : 2;
+        DrawPixelText(label.c_str(), left + 10, top + (scale == 2 ? 12 : 15), scale);
+    }
+    char widthLine[48];
+    std::snprintf(widthLine, sizeof(widthLine), "ROAD WIDTH %d", static_cast<int>(gEditor.mHalfWidth * 2.0));
+    glColor3f(0.72f, 0.78f, 0.82f);
+    DrawPixelText(widthLine, layout.mPanelLeft, layout.mCanvasTop + 4 + (kEditorBack) * 46 + 10, 2);
+}
+
 void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSetting,
                      bool pAudioEnabled, int pMenuVolume, int pRaceVolume,
                      int pTrackIndex, int pLaps, int pRivalCount,
@@ -2866,28 +3182,32 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         DrawPixelText("ORIGINAL HOVER RACING", 64, 132, 3);
         DrawMenuHovercraft(pWidth / 4, pHeight / 2 + 125);
 
-        const char* options[] = {"PLAY LOCAL GAME", "MULTIPLAYER", "HOW TO PLAY", "SETTINGS", "QUIT"};
+        const char* options[] = {"PLAY LOCAL GAME", "MULTIPLAYER", "HOW TO PLAY", "SETTINGS", "TRACK EDITOR", "QUIT"};
         const int panelLeft = pWidth / 2 - 200;
         const int panelTop = 145;
-        for (int option = 0; option < 5; ++option)
+        for (int option = 0; option < 6; ++option)
         {
-            const int top = panelTop + option * 72;
+            const int top = panelTop + option * 64;
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
             glBegin(GL_QUADS);
             glVertex2i(panelLeft, top);
             glVertex2i(panelLeft + 400, top);
-            glVertex2i(panelLeft + 400, top + 62);
-            glVertex2i(panelLeft, top + 62);
+            glVertex2i(panelLeft + 400, top + 56);
+            glVertex2i(panelLeft, top + 56);
             glEnd();
             glColor3f(selected ? 1.0f : 0.56f, selected ? 0.82f : 0.72f,
                       selected ? 0.22f : 0.76f);
-            DrawPixelText(options[option], panelLeft + 68, top + 20, 3);
+            DrawPixelText(options[option], panelLeft + 68, top + 17, 3);
         }
         glColor3f(0.72f, 0.82f, 0.84f);
         DrawPixelText("UP DOWN TO SELECT", pWidth / 2 - 132, pHeight - 82, 3);
         DrawPixelText("ENTER TO CONFIRM", pWidth / 2 - 120, pHeight - 52, 3);
+    }
+    else if (pScreen == FrontScreen::TrackEditor)
+    {
+        DrawTrackEditor(pWidth, pHeight);
     }
     else if (pScreen == FrontScreen::Multiplayer)
     {
@@ -3243,7 +3563,7 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             "PAD  STICK STEER  TRIGGERS DRIVE",
             "PAD  " + padName(PadAction::Jump) + " JUMP  " + padName(PadAction::Fire) + " FIRE  "
                 + padName(PadAction::Recover) + " RECOVER",
-            "ALT  SHOW OR HIDE YOUR BEST-RUN GHOST",
+            "ALT  GHOST: BEST RUN, LAST RUN, OR OFF",
             "ESC OR START  PAUSE AND KEY BINDINGS"};
         int lineTop = 150;
         for (const std::string& line : lines)
@@ -3553,6 +3873,23 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText(speedLabel, 300, 27, 2);
     DrawRouteCue(pPlayerState, pActiveGate, pWidth, pHeight);
+    if (SDL_GetTicks() < gGhostToastUntil && !gGhostToast.empty())
+    {
+        glColor3f(0.6f, 0.86f, 1.0f);
+        DrawPixelText(gGhostToast.c_str(), 300, 76, 2);
+    }
+    else if (gGhostGapShown)
+    {
+        char gapLabel[40];
+        const int metres = static_cast<int>(std::fabs(gGhostGapMeters) + 0.5);
+        std::snprintf(gapLabel, sizeof(gapLabel), "%d M %s GHOST", metres,
+                      gGhostGapMeters >= 0.0 ? "AHEAD OF" : "BEHIND");
+        if (gGhostGapMeters >= 0.0)
+            glColor3f(0.3f, 1.0f, 0.5f);
+        else
+            glColor3f(1.0f, 0.6f, 0.25f);
+        DrawPixelText(gapLabel, 300, 76, 2);
+    }
 
     const int resourceLeft = 24;
     const int resourceWidth = 122;
@@ -4329,6 +4666,8 @@ int main(int pArgumentCount, char* pArguments[])
         SDL_free(preferencesDirectory);
     }
     Missile missile;
+    std::vector<Missile> rivalMissiles(kRivalCount);
+    std::vector<StallDetector> rivalStalls(kRivalCount);
     bool fireHeld = false;
     double impactSoundCooldown = 0.0;
     Uint32 checkpointVisualUntil = 0;
@@ -4336,30 +4675,53 @@ int main(int pArgumentCount, char* pArguments[])
     Uint32 impactVisualUntil = 0;
     InputRecording activeRecording;
     bool recoveredThisRun = false;
+    RouteTracker playerRoute;
+    RouteTracker ghostRoute;
     bool ghostSubmitted = false;
     InputRecording ghostRecording;
     std::size_t ghostFrame = 0;
     bool ghostActive = false;
     const auto resetRace = [&](bool pStartCountdown = true)
     {
-        // The ghost is the best completed run for this track and craft class, not the last attempt.
-        const InputRecording* bestGhost = gGhostLibrary.Find(selectedTrack.mId,
-                                                             static_cast<int>(playerCraftClass));
-        ghostActive = bestGhost != nullptr;
-        gGhostSecondsBeforeRace = gGhostLibrary.BestSeconds(selectedTrack.mId,
-                                                            static_cast<int>(playerCraftClass));
-        if (bestGhost != nullptr)
+        // The ghost is the best completed run for this track and craft class, or (if the player
+        // chose it) their last completed run. Best is also loaded while the ghost is off, so
+        // switching it on mid-race works.
+        const int craftClassValue = static_cast<int>(playerCraftClass);
+        const InputRecording* ghostSource = nullptr;
+        double ghostSourceSeconds = 0.0;
+        if (gGhostMode == 2 && gLastRun.mCraftClass == craftClassValue && gLastRun.mTrackId == selectedTrack.mId)
         {
-            ghostRecording = *bestGhost;
+            ghostSource = &gLastRun.mRecording;
+            ghostSourceSeconds = gLastRun.mSeconds;
+            gGhostSourceLabel = "LAST";
+        }
+        else
+        {
+            ghostSource = gGhostLibrary.Find(selectedTrack.mId, craftClassValue);
+            ghostSourceSeconds = gGhostLibrary.BestSeconds(selectedTrack.mId, craftClassValue);
+            gGhostSourceLabel = "BEST";
+        }
+        ghostActive = ghostSource != nullptr;
+        gGhostSecondsBeforeRace = ghostSourceSeconds;
+        if (ghostSource != nullptr)
+        {
+            ghostRecording = *ghostSource;
             replayGhost = Hovercraft(CraftClassTuning(playerCraftClass));
             replayGhost.Reset(spawn);
             ghostFrame = 0;
         }
         activeRecording.Clear();
+        playerRoute.Reset();
+        ghostRoute.Reset();
+        gGhostGapShown = false;
         recoveredThisRun = false;
         ghostSubmitted = false;
         gNewGhostBest = false;
         missile.Reset();
+        for (Missile& rivalMissile : rivalMissiles)
+            rivalMissile.Reset();
+        for (StallDetector& rivalStall : rivalStalls)
+            rivalStall.Reset();
         fireHeld = false;
         checkpointVisualUntil = 0;
         boostVisualUntil = 0;
@@ -4423,7 +4785,7 @@ int main(int pArgumentCount, char* pArguments[])
                  brakingAssistEnabled ? 1 : 0, static_cast<int>(playerCraftClass),
                  static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
                  static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5));
-        std::fprintf(preferences, "%d %d\n", static_cast<int>(gCameraMotion), gGhostVisible ? 1 : 0);
+        std::fprintf(preferences, "%d %d\n", static_cast<int>(gCameraMotion), gGhostMode);
         std::fclose(preferences);
     };
     char bindingsFile[512] = {};
@@ -4538,7 +4900,7 @@ int main(int pArgumentCount, char* pArguments[])
                     gCameraMotion = static_cast<CameraMotion>(savedCameraMotion);
                 int savedGhostVisible = 1;
                 if (std::fscanf(preferences, "%d", &savedGhostVisible) == 1)
-                    gGhostVisible = savedGhostVisible != 0;
+                    gGhostMode = savedGhostVisible >= 0 && savedGhostVisible <= 2 ? savedGhostVisible : 1;
             }
         }
         if (preferences != nullptr)
@@ -4864,6 +5226,65 @@ int main(int pArgumentCount, char* pArguments[])
             gHostSetupSelection = 0;
             frontScreen = FrontScreen::HostRaceSetup;
         }
+    };
+    // Writes the editor's track to the tracks folder and adds it to the local race list. Saving again
+    // after more edits replaces the track this editor saved before. Returns true on success and
+    // leaves the reason in gEditor.mStatus otherwise.
+    const auto saveEditorTrack = [&]() -> bool
+    {
+        if (!gEditor.mBuilt.mOk)
+        {
+            gEditor.mStatus = "FIX THE PROBLEM ABOVE FIRST";
+            return false;
+        }
+        const TrackDefinition& track = gEditor.mBuilt.mTrack;
+        int replaceIndex = -1;
+        for (int index = 0; index < static_cast<int>(gLocalTracks.size()); ++index)
+        {
+            if (gLocalTracks[index].mId == track.mId || gLocalTracks[index].mName == track.mName)
+            {
+                if (index == gEditor.mSavedIndex && gLocalTracks[index].mId == track.mId)
+                    replaceIndex = index;
+                else
+                {
+                    gEditor.mStatus = "A TRACK WITH THAT NAME EXISTS - CHANGE THE NAME";
+                    return false;
+                }
+            }
+        }
+        char* savePrefix = SDL_GetPrefPath("OpenHover", "OpenHover");
+        if (savePrefix == nullptr)
+        {
+            gEditor.mStatus = "CANNOT FIND A PLACE TO SAVE";
+            return false;
+        }
+        const std::string directory = std::string(savePrefix) + "tracks";
+        SDL_free(savePrefix);
+        const std::string path = directory + "/" + track.mId + ".ohtrack";
+        const std::string text = SerializeTrack(track);
+        FILE* file = EnsureDirectory(directory) ? std::fopen(path.c_str(), "wb") : nullptr;
+        const bool written = file != nullptr && std::fwrite(text.data(), 1, text.size(), file) == text.size();
+        if (file != nullptr)
+            std::fclose(file);
+        if (!written)
+        {
+            gEditor.mStatus = "COULD NOT SAVE THE FILE";
+            return false;
+        }
+        if (replaceIndex >= 0)
+        {
+            gLocalTracks[replaceIndex] = track;
+            gLocalTrackHashes[replaceIndex] = TrackHash(track);
+            gEditor.mSavedIndex = replaceIndex;
+        }
+        else
+        {
+            gLocalTracks.push_back(track);
+            gLocalTrackHashes.push_back(TrackHash(track));
+            gEditor.mSavedIndex = static_cast<int>(gLocalTracks.size()) - 1;
+        }
+        gEditor.mStatus = "SAVED - RACE IT FROM PLAY LOCAL GAME";
+        return true;
     };
     // Starts hosting a room. A built-in track is just named in the request; a custom track is
     // uploaded first and the room is created once the server has accepted it.
@@ -5342,6 +5763,185 @@ int main(int pArgumentCount, char* pArguments[])
                     event.key.keysym.mod = KMOD_NONE;
                 }
             }
+            if (frontScreen == FrontScreen::TrackEditor)
+            {
+                int windowWidth = 0;
+                int windowHeight = 0;
+                int drawableWidth = 0;
+                int drawableHeight = 0;
+                SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+                SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
+                const EditorLayout layout = ComputeEditorLayout(drawableWidth, drawableHeight);
+                const auto toDrawableX = [&](int pX) { return pX * drawableWidth / std::max(1, windowWidth); };
+                const auto toDrawableY = [&](int pY) { return pY * drawableHeight / std::max(1, windowHeight); };
+                const auto nearestPoint = [&](int pMouseX, int pMouseY)
+                {
+                    int best = -1;
+                    double bestDistance = 12.0;
+                    for (std::size_t index = 0; index < gEditor.mPoints.size(); ++index)
+                    {
+                        const double distance = std::hypot(
+                            EditorScreenX(layout, gEditor.mPoints[index].mX) - pMouseX,
+                            EditorScreenY(layout, gEditor.mPoints[index].mY) - pMouseY);
+                        if (distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            best = static_cast<int>(index);
+                        }
+                    }
+                    return best;
+                };
+                const auto inCanvas = [&](int pMouseX, int pMouseY)
+                {
+                    return IsPointInRect(pMouseX, pMouseY, layout.mCanvasLeft, layout.mCanvasTop,
+                                         layout.mCanvasSize, layout.mCanvasSize);
+                };
+                if (event.type == SDL_TEXTINPUT)
+                {
+                    if (gEditor.mNaming)
+                    {
+                        for (const char* c = event.text.text; *c != '\0'; ++c)
+                        {
+                            const bool allowed = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z')
+                                || (*c >= '0' && *c <= '9') || *c == ' ' || *c == '.' || *c == '_'
+                                || *c == '-';
+                            if (allowed && gEditor.mName.size() < 24)
+                                gEditor.mName += *c;
+                        }
+                        RefreshEditorBuild();
+                    }
+                    continue;
+                }
+                if (event.type == SDL_KEYDOWN)
+                {
+                    const SDL_Keycode key = event.key.keysym.sym;
+                    if (gEditor.mNaming)
+                    {
+                        if (key == SDLK_BACKSPACE && !gEditor.mName.empty())
+                            gEditor.mName.pop_back();
+                        else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_ESCAPE)
+                        {
+                            gEditor.mNaming = false;
+                            SDL_StopTextInput();
+                        }
+                        RefreshEditorBuild();
+                    }
+                    else if (key == SDLK_ESCAPE)
+                        frontScreen = FrontScreen::Welcome;
+                    else if (key == SDLK_BACKSPACE && !gEditor.mPoints.empty())
+                    {
+                        gEditor.mPoints.pop_back();
+                        gEditor.mStatus.clear();
+                        RefreshEditorBuild();
+                    }
+                    continue;
+                }
+                if (event.type == SDL_MOUSEMOTION && gEditor.mDragIndex >= 0
+                    && gEditor.mDragIndex < static_cast<int>(gEditor.mPoints.size()))
+                {
+                    const int mouseX = toDrawableX(event.motion.x);
+                    const int mouseY = toDrawableY(event.motion.y);
+                    gEditor.mPoints[gEditor.mDragIndex].mX = EditorSnap(EditorWorldX(layout, mouseX));
+                    gEditor.mPoints[gEditor.mDragIndex].mY = EditorSnap(EditorWorldY(layout, mouseY));
+                    RefreshEditorBuild();
+                    continue;
+                }
+                if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
+                {
+                    gEditor.mDragIndex = -1;
+                    continue;
+                }
+                if (event.type == SDL_MOUSEBUTTONDOWN)
+                {
+                    const int mouseX = toDrawableX(event.button.x);
+                    const int mouseY = toDrawableY(event.button.y);
+                    if (event.button.button == SDL_BUTTON_RIGHT)
+                    {
+                        const int hit = inCanvas(mouseX, mouseY) ? nearestPoint(mouseX, mouseY) : -1;
+                        if (hit >= 0)
+                        {
+                            gEditor.mPoints.erase(gEditor.mPoints.begin() + hit);
+                            gEditor.mStatus.clear();
+                            RefreshEditorBuild();
+                        }
+                        continue;
+                    }
+                    if (event.button.button != SDL_BUTTON_LEFT)
+                        continue;
+                    int clicked = -1;
+                    for (int button = 0; button < kEditorButtonCount; ++button)
+                    {
+                        int left = 0;
+                        int top = 0;
+                        int width = 0;
+                        int height = 0;
+                        EditorButtonRect(layout, button, left, top, width, height);
+                        if (IsPointInRect(mouseX, mouseY, left, top, width, height))
+                            clicked = button;
+                    }
+                    if (clicked == kEditorName)
+                    {
+                        gEditor.mNaming = !gEditor.mNaming;
+                        if (gEditor.mNaming)
+                            SDL_StartTextInput();
+                        else
+                            SDL_StopTextInput();
+                    }
+                    else if (clicked == kEditorNarrower || clicked == kEditorWider)
+                    {
+                        gEditor.mHalfWidth = std::max(4.0, std::min(14.0,
+                            gEditor.mHalfWidth + (clicked == kEditorWider ? 1.0 : -1.0)));
+                        gEditor.mStatus.clear();
+                        RefreshEditorBuild();
+                    }
+                    else if (clicked == kEditorUndo)
+                    {
+                        if (!gEditor.mPoints.empty())
+                            gEditor.mPoints.pop_back();
+                        gEditor.mStatus.clear();
+                        RefreshEditorBuild();
+                    }
+                    else if (clicked == kEditorClear)
+                    {
+                        gEditor.mPoints.clear();
+                        gEditor.mStatus.clear();
+                        RefreshEditorBuild();
+                    }
+                    else if (clicked == kEditorBack)
+                    {
+                        if (gEditor.mNaming)
+                            SDL_StopTextInput();
+                        gEditor.mNaming = false;
+                        frontScreen = FrontScreen::Welcome;
+                    }
+                    else if (clicked == kEditorSave || clicked == kEditorDrive)
+                    {
+                        if (saveEditorTrack() && clicked == kEditorDrive)
+                        {
+                            trackIndex = gEditor.mSavedIndex;
+                            localSetupSelection = 0;
+                            loadTrack(false);
+                            startLocalRace();
+                        }
+                    }
+                    else if (inCanvas(mouseX, mouseY))
+                    {
+                        const int hit = nearestPoint(mouseX, mouseY);
+                        if (hit >= 0)
+                            gEditor.mDragIndex = hit;
+                        else if (gEditor.mPoints.size() < kEditorMaximumPoints)
+                        {
+                            EditorPoint point;
+                            point.mX = EditorSnap(EditorWorldX(layout, mouseX));
+                            point.mY = EditorSnap(EditorWorldY(layout, mouseY));
+                            gEditor.mPoints.push_back(point);
+                            gEditor.mStatus.clear();
+                            RefreshEditorBuild();
+                        }
+                    }
+                    continue;
+                }
+            }
             if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
                 int windowWidth = 0;
@@ -5354,9 +5954,9 @@ int main(int pArgumentCount, char* pArguments[])
                 const int mouseY = event.button.y * drawableHeight / std::max(1, windowHeight);
                 if (frontScreen == FrontScreen::Welcome)
                 {
-                    const int option = (mouseY - 145) / 72;
-                    if (option >= 0 && option < 5
-                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 200, 145 + option * 72, 400, 62))
+                    const int option = (mouseY - 145) / 64;
+                    if (option >= 0 && option < 6
+                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 200, 145 + option * 64, 400, 56))
                     {
                         if (option == 0)
                         {
@@ -5374,6 +5974,12 @@ int main(int pArgumentCount, char* pArguments[])
                         {
                             frontScreen = FrontScreen::Settings;
                             settingsSelection = 0;
+                        }
+                        else if (option == 4)
+                        {
+                            frontScreen = FrontScreen::TrackEditor;
+                            gEditor.mStatus.clear();
+                            RefreshEditorBuild();
                         }
                         else
                             running = false;
@@ -5864,9 +6470,9 @@ int main(int pArgumentCount, char* pArguments[])
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Welcome)
                 {
                     if (event.key.keysym.sym == SDLK_UP)
-                        frontSelection = (frontSelection + 4) % 5;
+                        frontSelection = (frontSelection + 5) % 6;
                     else if (event.key.keysym.sym == SDLK_DOWN)
-                        frontSelection = (frontSelection + 1) % 5;
+                        frontSelection = (frontSelection + 1) % 6;
                     else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                     {
                         if (frontSelection == 0)
@@ -5885,6 +6491,12 @@ int main(int pArgumentCount, char* pArguments[])
                         {
                             frontScreen = FrontScreen::Settings;
                             settingsSelection = 0;
+                        }
+                        else if (frontSelection == 4)
+                        {
+                            frontScreen = FrontScreen::TrackEditor;
+                            gEditor.mStatus.clear();
+                            RefreshEditorBuild();
                         }
                         else
                             running = false;
@@ -6063,7 +6675,13 @@ int main(int pArgumentCount, char* pArguments[])
                 && (event.key.keysym.sym == SDLK_LALT || event.key.keysym.sym == SDLK_RALT)
                 && frontScreen == FrontScreen::RaceSetup)
             {
-                gGhostVisible = !gGhostVisible;
+                gGhostMode = gGhostMode == 1 ? 2 : (gGhostMode == 2 ? 0 : 1);
+                gGhostToast = gGhostMode == 0 ? "GHOST OFF"
+                    : (gGhostMode == 1 ? "GHOST: BEST RUN" : "GHOST: LAST RUN");
+                if (gGhostMode != 0 && raceStart.Started() && winner == 0 && ghostActive
+                    && gGhostSourceLabel != (gGhostMode == 1 ? "BEST" : "LAST"))
+                    gGhostToast += " FROM NEXT RACE";
+                gGhostToastUntil = SDL_GetTicks() + 2200;
                 savePreferences();
             }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v)
@@ -6225,6 +6843,17 @@ int main(int pArgumentCount, char* pArguments[])
                         rivalInput.mJump = ShouldJumpRaisedSection(rivals[rivalIndex].State(),
                                                                    raisedSections);
                         rivals[rivalIndex].Step(rivalInput, seconds);
+                        if (weaponsAllowed && rivalInput.mFire)
+                            rivalMissiles[rivalIndex].Fire(rivals[rivalIndex].State());
+                        // A rival stuck against a wall puts itself back on the road, like a player
+                        // pressing recover.
+                        if (rivalStalls[rivalIndex].Update(rivals[rivalIndex].State().mX,
+                                                           rivals[rivalIndex].State().mY, seconds))
+                        {
+                            HovercraftState recovered = rivals[rivalIndex].State();
+                            if (RecoverHovercraftToRoute(recovered, course, finish, true))
+                                rivals[rivalIndex].Reset(recovered);
+                        }
                     }
                     for (int rivalIndex = 0; rivalIndex < rivalCount; ++rivalIndex)
                     {
@@ -6279,6 +6908,26 @@ int main(int pArgumentCount, char* pArguments[])
                             impactVisualUntil = SDL_GetTicks() + 650;
                         }
                     }
+                    // Rival missiles can hit the player and the other rivals.
+                    for (int shooter = 0; shooter < kRivalCount; ++shooter)
+                    {
+                        rivalMissiles[shooter].Step(seconds, course);
+                        HovercraftState hitPlayer = hovercraft.State();
+                        if (rivalMissiles[shooter].ApplyHit(hitPlayer))
+                        {
+                            hovercraft.Reset(hitPlayer);
+                            audioFeedback.PlayImpact();
+                            impactVisualUntil = SDL_GetTicks() + 650;
+                        }
+                        for (int target = 0; target < kRivalCount; ++target)
+                        {
+                            if (target == shooter)
+                                continue;
+                            HovercraftState hitRival = rivals[target].State();
+                            if (rivalMissiles[shooter].ApplyHit(hitRival))
+                                rivals[target].Reset(hitRival);
+                        }
+                    }
                 }
                 if (BounceOffCourseWall(hovercraft, course) && impactSoundCooldown <= 0.0)
                 {
@@ -6327,10 +6976,27 @@ int main(int pArgumentCount, char* pArguments[])
             }
         }
         const HovercraftState& state = hovercraft.State();
+        // Gap to the ghost along the road, for the HUD.
+        if (ghostActive && gGhostMode != 0 && raceStart.Started() && winner == 0)
+        {
+            const double playerDistance = playerRoute.Update(course, state.mX, state.mY);
+            const double ghostDistance = ghostRoute.Update(course, replayGhost.State().mX, replayGhost.State().mY);
+            gGhostGapMeters = playerDistance - ghostDistance;
+            gGhostGapShown = true;
+        }
+        else
+            gGhostGapShown = false;
         // A run that used recovery cannot be replayed from inputs alone, so it never becomes a ghost.
         if (race.Progress().mFinished && !ghostSubmitted)
         {
             ghostSubmitted = true;
+            if (!recoveredThisRun)
+            {
+                gLastRun.mTrackId = selectedTrack.mId;
+                gLastRun.mCraftClass = static_cast<int>(playerCraftClass);
+                gLastRun.mSeconds = race.Progress().mElapsedSeconds;
+                gLastRun.mRecording = activeRecording;
+            }
             if (!recoveredThisRun
                 && gGhostLibrary.Submit(selectedTrack.mId, static_cast<int>(playerCraftClass),
                                         race.Progress().mElapsedSeconds, activeRecording))
@@ -6623,13 +7289,15 @@ int main(int pArgumentCount, char* pArguments[])
         for (const Mine& mine : mines)
             DrawMine(mine);
         DrawMissile(missile);
+        for (const Missile& rivalMissile : rivalMissiles)
+            DrawMissile(rivalMissile);
 
         if (RaceModeUsesRivals(raceMode))
         {
             for (int rivalIndex = 0; rivalIndex < static_cast<int>(rivalStates.size()); ++rivalIndex)
                 DrawHovercraft(rivalStates[rivalIndex], true, false, CraftClass::Balanced, rivalIndex + 2);
         }
-        if (ghostActive && gGhostVisible)
+        if (ghostActive && gGhostMode != 0)
             DrawHovercraft(replayGhost.State(), false, true, playerCraftClass, 1);
         DrawHovercraft(state, false, false, playerCraftClass, 1);
         std::vector<RaceProgress> rivalProgresses(raceProgresses.begin() + 1, raceProgresses.end());

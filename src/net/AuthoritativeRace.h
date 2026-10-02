@@ -17,6 +17,7 @@
 #include "RecoveryAssist.h"
 #include "RaisedSection.h"
 #include "RivalController.h"
+#include "StallDetector.h"
 #include "TrackDefinition.h"
 
 #include <memory>
@@ -93,6 +94,8 @@ private:
         Missile mMissile;
         std::unique_ptr<RivalController> mRivalController;
         bool mRecoverRequested = false;
+        StallDetector mStallDetector; // AI rivals only: recovers a rival that is stuck
+
         bool mSteeringAssistEnabled = false;
         bool mBrakingAssistEnabled = false;
         Race mRace;

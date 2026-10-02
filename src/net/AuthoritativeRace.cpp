@@ -160,11 +160,12 @@ void AuthoritativeRace::Step()
         }
         if (racer.mRecoverRequested)
         {
+            const bool forced = racer.mRivalController != nullptr;
             const RaceProgress& progress = racer.mRace.Progress();
             const RaceGate& target = progress.mNextCheckpoint < static_cast<int>(mCheckpoints.size())
                 ? mCheckpoints[progress.mNextCheckpoint] : mFinish;
             HovercraftState state = racer.mHovercraft.State();
-            if (RecoverHovercraftToRoute(state, *mCourse, target))
+            if (RecoverHovercraftToRoute(state, *mCourse, target, forced))
                 racer.mHovercraft.Reset(state);
             racer.mRecoverRequested = false;
         }
@@ -219,6 +220,10 @@ void AuthoritativeRace::Step()
         for (const HazardZone& zone : mHazardZones)
             ApplyHazardZone(state, zone, 1.0 / 120.0);
         racer.mHovercraft.Reset(state);
+        // A rival wedged against a wall (after a collision or a missile, say) puts itself back on
+        // the road, just as a player would with the recovery button.
+        if (racer.mRivalController && racer.mStallDetector.Update(state.mX, state.mY, 1.0 / 120.0))
+            racer.mRecoverRequested = true;
         racer.mRace.Update(state.mX, state.mY, 1.0 / 120.0);
         racer.mLapTimer.Update(racer.mRace.Progress());
     }

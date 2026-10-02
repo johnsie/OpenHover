@@ -19,6 +19,8 @@ struct RivalTuning
     double mPace = 1.0;
     double mSteeringGain = 1.5;
     double mCornerLookAheadDistance = 12.0;
+    // Whether the rival fires missiles at craft lined up ahead of it.
+    bool mFiresMissiles = true;
 };
 
 RivalDifficulty NextRivalDifficulty(RivalDifficulty pDifficulty);

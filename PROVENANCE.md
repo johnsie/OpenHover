@@ -151,6 +151,15 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/TrackHash.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track content hash and online-safe name API |
 | `src/game/TrackHash.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | SHA-256 of canonical track text |
 | `tests/TrackHashSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track hash stability and sensitivity test |
+| `src/game/TrackBuilder.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | editor points to complete track API |
+| `src/game/TrackBuilder.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | start straight, checkpoints, bridges and pads from placed points |
+| `tests/TrackBuilderSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track builder validity and drivability test |
+| `src/game/RouteTracker.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | cumulative route distance tracker API |
+| `src/game/RouteTracker.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | lap-aware distance along the route |
+| `tests/RouteTrackerSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | route distance across laps and crossings test |
+| `src/game/StallDetector.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stalled craft detection API |
+| `src/game/StallDetector.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stuck-in-place timer |
+| `tests/StallDetectorSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stall detection test |
 | `src/game/GhostLibrary.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best-run ghost store API |
 | `src/game/GhostLibrary.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best ghost selection and versioned persistence |
 | `tests/GhostLibrarySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ghost selection and persistence test |

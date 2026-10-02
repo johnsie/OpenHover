@@ -63,7 +63,16 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Install NSIS
         shell: pwsh
-        run: choco install nsis --yes --no-progress
+        # The Chocolatey community feed sometimes answers 503; retry with a growing pause.
+        run: |
+          $installed = $false
+          foreach ($attempt in 1..5) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            Write-Host "Chocolatey attempt $attempt failed; retrying in $($attempt * 15) seconds"
+            Start-Sleep -Seconds ($attempt * 15)
+          }
+          if (-not $installed) { throw "Could not install NSIS after 5 attempts" }
       - name: Install SDL2
         shell: pwsh
         run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sdl2:x64-windows-static'
