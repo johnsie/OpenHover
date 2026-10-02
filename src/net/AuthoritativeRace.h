@@ -4,7 +4,9 @@
 
 #include "Course.h"
 #include "Hovercraft.h"
+#include "LapTiming.h"
 #include "Lobby.h"
+#include "RacePosition.h"
 
 #include <memory>
 #include <vector>
@@ -22,18 +24,22 @@ struct RaceRacerSnapshot
 {
     LobbyPlayerId mPlayerId = 0;
     HovercraftState mState;
+    RaceProgress mProgress;
+    LapTiming mLapTiming;
+    int mPosition = 0;
 };
 
 struct RaceSnapshot
 {
     unsigned int mTick = 0;
+    int mTargetLaps = 0;
     std::vector<RaceRacerSnapshot> mRacers;
 };
 
 class AuthoritativeRace
 {
 public:
-    bool Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex);
+    bool Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex, int pTargetLaps = 3);
     bool SubmitInput(const RaceInputCommand& pCommand);
     void Step();
     void Stop();
@@ -44,15 +50,20 @@ public:
 private:
     struct Racer
     {
-        explicit Racer(LobbyPlayerId pPlayerId) : mPlayerId(pPlayerId) {}
+                Racer(LobbyPlayerId pPlayerId, const std::vector<RaceGate>& pWaypoints,
+                            const RaceGate& pFinish, int pTargetLaps)
+                        : mPlayerId(pPlayerId), mRace(pWaypoints, pFinish, pTargetLaps) {}
 
         LobbyPlayerId mPlayerId;
         Hovercraft mHovercraft;
         HovercraftInput mInput;
+                Race mRace;
+                LapTimer mLapTimer;
     };
 
     bool mActive = false;
     unsigned int mTick = 0;
+    int mTargetLaps = 0;
     std::unique_ptr<Course> mCourse;
     std::vector<Racer> mRacers;
 };

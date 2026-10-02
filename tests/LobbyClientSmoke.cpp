@@ -142,8 +142,9 @@ int main(int pArgumentCount, char* pArguments[])
         && TickUntilContaining(guest, "|R,1,Smoke race,1,2,2,");
     const bool raceStarted = guestJoined && host.SendCommand("START 1")
         && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
+    const bool raceHudReceived = raceStarted && TickUntilPrefix(host, "RACEHUD 1|3|");
     bool spectatorReceivedRace = false;
-    for (int attempt = 0; attempt < 20 && raceStarted; ++attempt)
+    for (int attempt = 0; attempt < 20 && raceHudReceived; ++attempt)
     {
         spectator.Tick();
         spectatorReceivedRace = spectatorReceivedRace
@@ -156,7 +157,7 @@ int main(int pArgumentCount, char* pArguments[])
     kill(serverProcess, SIGTERM);
     int serverStatus = 0;
     waitpid(serverProcess, &serverStatus, 0);
-    if (!raceStarted || spectatorReceivedRace)
+    if (!raceHudReceived || spectatorReceivedRace)
     {
         std::cerr << "tcp lobby server did not isolate authoritative race snapshots\n";
         return 1;

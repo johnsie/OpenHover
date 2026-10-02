@@ -72,6 +72,9 @@ struct OnlineRacerView
 {
     int mPlayerId = 0;
     HovercraftState mState;
+    RaceProgress mProgress;
+    LapTiming mLapTiming;
+    int mPosition = 0;
 };
 
 std::vector<std::string> gLobbyPlayers;
@@ -95,6 +98,7 @@ bool gHostCreatePending = false;
 bool gDisplayNameSetupConnectsToLobby = false;
 int gOnlineRaceRoomId = 0;
 unsigned int gOnlineRaceTick = 0;
+int gOnlineTargetLaps = 0;
 std::vector<OnlineRacerView> gOnlineRacers;
 
 std::vector<std::string> SplitLobbyField(const std::string& pText, char pDelimiter)
@@ -183,6 +187,40 @@ bool ParseRaceSnapshot(const std::string& pMessage)
     gOnlineRaceRoomId = roomId;
     gOnlineRaceTick = static_cast<unsigned int>(tick);
     gOnlineRacers.swap(racers);
+    return true;
+}
+
+bool ParseRaceHudSnapshot(const std::string& pMessage)
+{
+    const std::vector<std::string> entries = SplitLobbyField(pMessage, '|');
+    if (entries.size() < 3 || entries[0].compare(0, 8, "RACEHUD ") != 0)
+        return false;
+    const int roomId = std::atoi(entries[0].substr(8).c_str());
+    const int targetLaps = std::atoi(entries[1].c_str());
+    if (roomId != gOnlineRaceRoomId || targetLaps < 1)
+        return false;
+    for (std::size_t index = 2; index < entries.size(); ++index)
+    {
+        const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
+        if (fields.size() != 9)
+            return false;
+        const int playerId = std::atoi(fields[0].c_str());
+        for (OnlineRacerView& racer : gOnlineRacers)
+        {
+            if (racer.mPlayerId != playerId)
+                continue;
+            racer.mProgress.mCompletedLaps = std::atoi(fields[1].c_str());
+            racer.mProgress.mNextCheckpoint = std::atoi(fields[2].c_str());
+            racer.mProgress.mElapsedSeconds = std::strtod(fields[3].c_str(), nullptr);
+            racer.mProgress.mFinished = std::atoi(fields[4].c_str()) != 0;
+            racer.mPosition = std::atoi(fields[5].c_str());
+            racer.mLapTiming.mCurrentSeconds = std::strtod(fields[6].c_str(), nullptr);
+            racer.mLapTiming.mLastSeconds = std::strtod(fields[7].c_str(), nullptr);
+            racer.mLapTiming.mBestSeconds = std::strtod(fields[8].c_str(), nullptr);
+            break;
+        }
+    }
+    gOnlineTargetLaps = targetLaps;
     return true;
 }
 
@@ -2674,8 +2712,8 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glEnable(GL_LIGHTING);
 }
 
-void DrawOnlineHud(const HovercraftState& pPlayerState, int pRacerCount, unsigned int pServerTick,
-                   int pWidth, int pHeight)
+void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetLaps,
+                   unsigned int pServerTick, int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
     glDisable(GL_FOG);
@@ -2688,27 +2726,50 @@ void DrawOnlineHud(const HovercraftState& pPlayerState, int pRacerCount, unsigne
     glPushMatrix();
     glLoadIdentity();
 
-    const int speed = static_cast<int>(std::fabs(pPlayerState.mSpeed));
+    const int speed = static_cast<int>(std::fabs(pPlayer.mState.mSpeed));
+    const int targetLaps = std::max(1, std::min(5, pTargetLaps));
+    const int displayedLap = std::min(targetLaps, pPlayer.mProgress.mCompletedLaps + 1);
+    const int elapsedSeconds = static_cast<int>(pPlayer.mProgress.mElapsedSeconds);
+    const int currentLapSeconds = static_cast<int>(pPlayer.mLapTiming.mCurrentSeconds);
+    const int bestLapSeconds = static_cast<int>(pPlayer.mLapTiming.mBestSeconds);
     char speedLabel[24];
     char racersLabel[24];
     char tickLabel[32];
+    char lapLabel[24];
+    char timeLabel[32];
+    char currentLapLabel[32];
+    char bestLapLabel[32];
+    char positionLabel[24];
     std::snprintf(speedLabel, sizeof(speedLabel), "SPEED %d", speed);
     std::snprintf(racersLabel, sizeof(racersLabel), "RACERS %d", pRacerCount);
     std::snprintf(tickLabel, sizeof(tickLabel), "SERVER %u", pServerTick);
+    std::snprintf(lapLabel, sizeof(lapLabel), "LAP %d OF %d", displayedLap, targetLaps);
+    std::snprintf(timeLabel, sizeof(timeLabel), "TIME %d M %d S", elapsedSeconds / 60, elapsedSeconds % 60);
+    std::snprintf(currentLapLabel, sizeof(currentLapLabel), "LAP TIME %d M %d S",
+                  currentLapSeconds / 60, currentLapSeconds % 60);
+    std::snprintf(bestLapLabel, sizeof(bestLapLabel), "BEST %d M %d S",
+                  bestLapSeconds / 60, bestLapSeconds % 60);
+    std::snprintf(positionLabel, sizeof(positionLabel), "PLACE %d OF %d",
+                  pPlayer.mPosition, pRacerCount);
     glColor3f(0.02f, 0.05f, 0.08f);
     glBegin(GL_QUADS);
     glVertex2i(16, 16);
-    glVertex2i(214, 16);
-    glVertex2i(214, 92);
-    glVertex2i(16, 92);
+    glVertex2i(260, 16);
+    glVertex2i(260, 146);
+    glVertex2i(16, 146);
     glEnd();
     glColor3f(0.2f, 0.9f, 1.0f);
     DrawPixelText("ONLINE RACE", 28, 28, 2);
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText(speedLabel, 28, 48, 2);
     DrawPixelText(racersLabel, 28, 66, 2);
+    DrawPixelText(lapLabel, 28, 84, 2);
+    DrawPixelText(timeLabel, 28, 102, 2);
+    DrawPixelText(currentLapLabel, 28, 120, 2);
+    DrawPixelText(bestLapLabel, 28, 138, 2);
     glColor3f(1.0f, 0.78f, 0.12f);
     DrawPixelText(tickLabel, pWidth - 144, 28, 2);
+    DrawPixelText(positionLabel, pWidth - 144, 46, 2);
 
     glPopMatrix();
     glMatrixMode(GL_PROJECTION);
@@ -3075,6 +3136,7 @@ int main(int pArgumentCount, char* pArguments[])
         gLobbyStatus = "DISCONNECTED";
         gOnlineRaceRoomId = 0;
         gOnlineRaceTick = 0;
+        gOnlineTargetLaps = 0;
         gOnlineRacers.clear();
     };
     const auto connectLobby = [&]()
@@ -3160,6 +3222,8 @@ int main(int pArgumentCount, char* pArguments[])
                 frontScreen = FrontScreen::OnlineRace;
                 gLobbyStatus = "RACING";
             }
+            else if (message.compare(0, 8, "RACEHUD ") == 0)
+                ParseRaceHudSnapshot(message);
             else if (message.compare(0, 6, "ERROR ") == 0)
             {
                 gHostCreatePending = false;
@@ -3437,6 +3501,7 @@ int main(int pArgumentCount, char* pArguments[])
                             lobbyClient.SendCommand("LEAVE");
                             gOnlineRaceRoomId = 0;
                             gOnlineRaceTick = 0;
+                            gOnlineTargetLaps = 0;
                             gOnlineRacers.clear();
                             SDL_StartTextInput();
                             frontScreen = FrontScreen::Multiplayer;
@@ -4023,7 +4088,7 @@ int main(int pArgumentCount, char* pArguments[])
                                static_cast<int>(racerIndex));
             }
             if (localRacer != nullptr)
-                DrawOnlineHud(localRacer->mState, static_cast<int>(gOnlineRacers.size()),
+                DrawOnlineHud(*localRacer, static_cast<int>(gOnlineRacers.size()), gOnlineTargetLaps,
                               gOnlineRaceTick, drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;

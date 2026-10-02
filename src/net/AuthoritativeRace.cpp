@@ -6,10 +6,12 @@
 
 #include <cmath>
 
-bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex)
+bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex,
+                              int pTargetLaps)
 {
     const std::vector<TrackDefinition>& tracks = BuiltInTracks();
-    if (pPlayerIds.empty() || pTrackIndex < 0 || pTrackIndex >= static_cast<int>(tracks.size()))
+    if (pPlayerIds.empty() || pTrackIndex < 0 || pTrackIndex >= static_cast<int>(tracks.size())
+        || pTargetLaps < 1)
         return false;
     mRacers.clear();
     const TrackDefinition& track = tracks[pTrackIndex];
@@ -33,7 +35,7 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
     const double sideY = forwardX;
     for (int index = 0; index < static_cast<int>(pPlayerIds.size()); ++index)
     {
-        Racer racer(pPlayerIds[index]);
+        Racer racer(pPlayerIds[index], track.mWaypoints, finish, pTargetLaps);
         HovercraftState spawn;
         spawn.mX = finish.mX + forwardX * (7.0 - index / 3 * 4.0) + sideX * ((index % 3 - 1) * 3.2);
         spawn.mY = finish.mY + forwardY * (7.0 - index / 3 * 4.0) + sideY * ((index % 3 - 1) * 3.2);
@@ -43,6 +45,7 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
         mRacers.push_back(racer);
     }
     mTick = 0;
+    mTargetLaps = pTargetLaps;
     mActive = true;
     return true;
 }
@@ -74,6 +77,8 @@ void AuthoritativeRace::Step()
         HovercraftState state = racer.mHovercraft.State();
         if (ResolveCourseWallCollision(state, *mCourse))
             racer.mHovercraft.Reset(state);
+        racer.mRace.Update(state.mX, state.mY, 1.0 / 120.0);
+        racer.mLapTimer.Update(racer.mRace.Progress());
     }
     ++mTick;
 }
@@ -83,13 +88,22 @@ void AuthoritativeRace::Stop()
     mActive = false;
     mCourse.reset();
     mRacers.clear();
+    mTargetLaps = 0;
 }
 
 RaceSnapshot AuthoritativeRace::Snapshot() const
 {
     RaceSnapshot snapshot;
     snapshot.mTick = mTick;
+    snapshot.mTargetLaps = mTargetLaps;
+    std::vector<RaceProgress> progresses;
     for (const Racer& racer : mRacers)
-        snapshot.mRacers.push_back({racer.mPlayerId, racer.mHovercraft.State()});
+        progresses.push_back(racer.mRace.Progress());
+    for (int index = 0; index < static_cast<int>(mRacers.size()); ++index)
+    {
+        const Racer& racer = mRacers[index];
+        snapshot.mRacers.push_back({racer.mPlayerId, racer.mHovercraft.State(), racer.mRace.Progress(),
+                                    racer.mLapTimer.Timing(), CalculateRacePosition(progresses, index)});
+    }
     return snapshot;
 }

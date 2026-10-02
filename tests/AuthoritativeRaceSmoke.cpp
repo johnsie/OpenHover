@@ -26,8 +26,10 @@ int main()
     for (int step = 0; step < 120; ++step)
         race.Step();
     const RaceSnapshot snapshot = race.Snapshot();
-    if (snapshot.mTick != 120 || snapshot.mRacers.size() != 2
-        || snapshot.mRacers[0].mState.mSpeed <= 0.0 || snapshot.mRacers[1].mState.mSpeed != 0.0)
+    if (snapshot.mTick != 120 || snapshot.mTargetLaps != 3 || snapshot.mRacers.size() != 2
+        || snapshot.mRacers[0].mState.mSpeed <= 0.0 || snapshot.mRacers[1].mState.mSpeed != 0.0
+        || snapshot.mRacers[0].mProgress.mElapsedSeconds <= 0.0 || snapshot.mRacers[0].mPosition != 1
+        || snapshot.mRacers[1].mPosition != 2)
     {
         std::cerr << "authoritative race did not advance only the submitted input\n";
         return 1;

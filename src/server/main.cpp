@@ -121,6 +121,27 @@ void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
     }
 }
 
+void BroadcastRaceHudSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
+                              const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
+{
+    const RaceSnapshot snapshot = pRace.Snapshot();
+    std::ostringstream message;
+    message << "RACEHUD " << pRoomId << '|' << snapshot.mTargetLaps;
+    for (const RaceRacerSnapshot& racer : snapshot.mRacers)
+    {
+        message << '|' << racer.mPlayerId << ',' << racer.mProgress.mCompletedLaps << ','
+                << racer.mProgress.mNextCheckpoint << ',' << racer.mProgress.mElapsedSeconds << ','
+                << (racer.mProgress.mFinished ? 1 : 0) << ',' << racer.mPosition << ','
+                << racer.mLapTiming.mCurrentSeconds << ',' << racer.mLapTiming.mLastSeconds << ','
+                << racer.mLapTiming.mBestSeconds;
+    }
+    for (const ClientConnection& client : pClients)
+    {
+        if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
+            SendLine(client, message.str());
+    }
+}
+
 void StopRace(Lobby& pLobby, std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
               LobbyRoomId pRoomId)
 {
@@ -240,7 +261,8 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             }
             AuthoritativeRace race;
             if (requestedRoom != nullptr
-                && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex)
+                && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex,
+                              requestedRoom->mSettings.mLapCount)
                 && pLobby.StartRace(pClient.mPlayerId, requestedRoom->mId))
             {
                 pRaces[requestedRoom->mId] = std::move(race);
@@ -395,7 +417,10 @@ int main(int pArgumentCount, char* pArguments[])
         {
             race->second.Step();
             if (race->second.Snapshot().mTick % 4 == 0)
+            {
                 BroadcastRaceSnapshot(race->first, race->second, lobby, clients);
+                BroadcastRaceHudSnapshot(race->first, race->second, lobby, clients);
+            }
         }
     }
     for (const ClientConnection& client : clients)
