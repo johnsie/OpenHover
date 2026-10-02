@@ -27,9 +27,13 @@ cmake -S . -B build && cmake --build build && ctest --test-dir build
 ## Process
 
 - [Clean-room policy](docs/clean-room-policy.md): what may and may not go in.
+- [Licensing](docs/licensing.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
 - [Provenance ledger](PROVENANCE.md): where every file came from. Run
   `scripts/check-provenance.py` before committing.
 
 ## Licence
 
-Not yet chosen. Decide it before the first outside contribution.
+Code and documentation are licensed under either the [MIT License](LICENSE-MIT) or the
+[Apache License 2.0](LICENSE-APACHE), at your option (`MIT OR Apache-2.0`). Created game
+assets are CC BY 4.0 (or CC0 where stated). Details, and which dependencies are acceptable:
+[licensing](docs/licensing.md). Contributions are accepted under the same terms.

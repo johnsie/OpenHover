@@ -17,7 +17,7 @@ hold:
 - **Carried over from the licensed project's repository, but written there after its
   import** and independent of it, and the maintainer confirms the ownership. Each such
   file is listed in `PROVENANCE.md` with where it came from; **or**
-- **Third party under a permissive licence** (MIT, BSD, zlib, Apache-2.0, CC0, or similar)
+- **Third party under a permissive licence** (MIT, BSD, zlib, Apache-2.0, CC0, or similar; see [licensing](licensing.md))
   whose text is kept, whose version is recorded, and which the maintainer approved.
 
 Everything is recorded in `PROVENANCE.md` **in the same commit that adds it**.
@@ -77,6 +77,6 @@ to hide it.
 
 ## 8. Open decisions
 
-- The OpenHover licence (not yet chosen).
+- The licence is chosen (MIT OR Apache-2.0, see [licensing](licensing.md)); it still needs a lawyer's review.
 - The project name and branding (the working name only describes the intent).
 - Who counts as a clean implementer, and how strict section 3 must be, after legal advice.
