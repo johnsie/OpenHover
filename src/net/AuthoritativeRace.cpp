@@ -91,6 +91,18 @@ void AuthoritativeRace::Stop()
     mTargetLaps = 0;
 }
 
+bool AuthoritativeRace::Complete() const
+{
+    if (!mActive || mRacers.empty())
+        return false;
+    for (const Racer& racer : mRacers)
+    {
+        if (!racer.mRace.Progress().mFinished)
+            return false;
+    }
+    return true;
+}
+
 RaceSnapshot AuthoritativeRace::Snapshot() const
 {
     RaceSnapshot snapshot;

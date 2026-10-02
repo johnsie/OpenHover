@@ -142,6 +142,17 @@ void BroadcastRaceHudSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRac
     }
 }
 
+void BroadcastRaceFinished(LobbyRoomId pRoomId, const Lobby& pLobby,
+                           const std::vector<ClientConnection>& pClients)
+{
+    const std::string message = "RACEFINISH " + std::to_string(pRoomId);
+    for (const ClientConnection& client : pClients)
+    {
+        if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
+            SendLine(client, message);
+    }
+}
+
 void StopRace(Lobby& pLobby, std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
               LobbyRoomId pRoomId)
 {
@@ -413,6 +424,7 @@ int main(int pArgumentCount, char* pArguments[])
             }
             ++index;
         }
+        std::vector<LobbyRoomId> completedRaces;
         for (std::map<LobbyRoomId, AuthoritativeRace>::iterator race = races.begin(); race != races.end(); ++race)
         {
             race->second.Step();
@@ -421,7 +433,18 @@ int main(int pArgumentCount, char* pArguments[])
                 BroadcastRaceSnapshot(race->first, race->second, lobby, clients);
                 BroadcastRaceHudSnapshot(race->first, race->second, lobby, clients);
             }
+            if (race->second.Complete())
+            {
+                BroadcastRaceSnapshot(race->first, race->second, lobby, clients);
+                BroadcastRaceHudSnapshot(race->first, race->second, lobby, clients);
+                BroadcastRaceFinished(race->first, lobby, clients);
+                completedRaces.push_back(race->first);
+            }
         }
+        for (LobbyRoomId roomId : completedRaces)
+            StopRace(lobby, races, roomId);
+        if (!completedRaces.empty())
+            BroadcastLobbySnapshot(lobby, clients);
     }
     for (const ClientConnection& client : clients)
         close(client.mSocket);

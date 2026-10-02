@@ -45,20 +45,21 @@ public:
     void Stop();
 
     bool Active() const { return mActive; }
+    bool Complete() const;
     RaceSnapshot Snapshot() const;
 
 private:
     struct Racer
     {
-                Racer(LobbyPlayerId pPlayerId, const std::vector<RaceGate>& pWaypoints,
-                            const RaceGate& pFinish, int pTargetLaps)
-                        : mPlayerId(pPlayerId), mRace(pWaypoints, pFinish, pTargetLaps) {}
+        Racer(LobbyPlayerId pPlayerId, const std::vector<RaceGate>& pWaypoints,
+              const RaceGate& pFinish, int pTargetLaps)
+            : mPlayerId(pPlayerId), mRace(pWaypoints, pFinish, pTargetLaps) {}
 
         LobbyPlayerId mPlayerId;
         Hovercraft mHovercraft;
         HovercraftInput mInput;
-                Race mRace;
-                LapTimer mLapTimer;
+            Race mRace;
+            LapTimer mLapTimer;
     };
 
     bool mActive = false;

@@ -10,7 +10,7 @@ int main()
 {
     AuthoritativeRace race;
     const std::vector<LobbyPlayerId> players = {11, 22};
-    if (!race.Start(players, 0) || !race.Active() || race.Start(players, 99))
+    if (!race.Start(players, 0) || !race.Active() || race.Complete() || race.Start(players, 99))
     {
         std::cerr << "authoritative race did not validate its start state\n";
         return 1;
