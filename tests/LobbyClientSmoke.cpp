@@ -27,6 +27,16 @@ bool ContainsPrefix(const std::vector<std::string>& pMessages, const std::string
     return false;
 }
 
+bool ContainsText(const std::vector<std::string>& pMessages, const std::string& pText)
+{
+    for (const std::string& message : pMessages)
+    {
+        if (message.find(pText) != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
 bool TickUntil(TcpLobbyClient& pClient, const std::string& pExpected)
 {
     for (int attempt = 0; attempt < 200; ++attempt)
@@ -64,6 +74,20 @@ bool TickUntilPrefix(TcpLobbyClient& pClient, const std::string& pExpectedPrefix
     return false;
 }
 
+bool TickUntilContaining(TcpLobbyClient& pClient, const std::string& pExpectedText)
+{
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        pClient.Tick();
+        if (ContainsText(pClient.TakeMessages(), pExpectedText))
+            return true;
+        if (pClient.State() == TcpLobbyClientState::Failed)
+            return false;
+        usleep(10000);
+    }
+    return false;
+}
+
 bool ConnectAndHello(TcpLobbyClient& pClient, int pPort, const std::string& pName, int pExpectedId)
 {
     for (int attempt = 0; attempt < 100; ++attempt)
@@ -86,11 +110,12 @@ int main(int pArgumentCount, char* pArguments[])
         std::cerr << "server path argument missing\n";
         return 1;
     }
-    const int port = 19701;
+    const int port = 20000 + static_cast<int>(getpid() % 20000);
+    const std::string portText = std::to_string(port);
     const pid_t serverProcess = fork();
     if (serverProcess == 0)
     {
-        execl(pArguments[1], pArguments[1], "--port", "19701", static_cast<char*>(nullptr));
+        execl(pArguments[1], pArguments[1], "--port", portText.c_str(), static_cast<char*>(nullptr));
         _exit(127);
     }
     if (serverProcess < 0)
@@ -114,7 +139,7 @@ int main(int pArgumentCount, char* pArguments[])
         guest.TakeMessages();
     }
     const bool guestJoined = roomCreated && guest.SendCommand("JOIN 1")
-        && TickUntilPrefix(guest, "LOBBY|");
+        && TickUntilContaining(guest, "|R,1,Smoke race,1,2,2,");
     const bool raceStarted = guestJoined && host.SendCommand("START 1")
         && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
     bool spectatorReceivedRace = false;
