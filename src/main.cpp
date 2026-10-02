@@ -2757,8 +2757,11 @@ int main()
             && (character < '0' || character > '9') && character != '_' && character != '-')
             character = '_';
     }
-    if (lobbyDisplayName.size() > 24)
-        lobbyDisplayName.resize(24);
+    const std::string sessionSuffix = "-" + std::to_string(
+        static_cast<unsigned long long>(SDL_GetPerformanceCounter() % 1000000));
+    if (lobbyDisplayName.size() + sessionSuffix.size() > 24)
+        lobbyDisplayName.resize(24 - sessionSuffix.size());
+    lobbyDisplayName += sessionSuffix;
     char preferencesFile[512] = {};
     char* preferencesDirectory = SDL_GetPrefPath("OpenHover", "OpenHover");
     if (preferencesDirectory != nullptr)
