@@ -4,6 +4,8 @@
 #include "Lobby.h"
 #include "Protocol.h"
 #include "TrackDefinition.h"
+#include "TrackHash.h"
+#include "TrackLoader.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -14,6 +16,7 @@
 #include <iostream>
 #include <map>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -46,7 +49,43 @@ struct ClientConnection
     std::string mReceiveBuffer;
     LobbyChatRateLimiter mChatRateLimiter;
     LobbyReportRateLimiter mReportRateLimiter;
+    // Hashes of the custom tracks this client says it has. Built-in tracks are implied by the
+    // content version negotiated in HELLO.
+    std::set<std::string> mOwnedTrackHashes;
 };
+
+// Every track the server will host: built-in first, then installed custom tracks. Rooms refer to
+// tracks by index into this list, which is published to clients with each track's hash.
+std::vector<TrackDefinition> gServerTracks;
+std::vector<std::string> gServerTrackHashes;
+const std::size_t kMaximumOwnedTracks = 64;
+
+bool IsHexHash(const std::string& pText)
+{
+    if (pText.size() != 64)
+        return false;
+    for (char c : pText)
+    {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return false;
+    }
+    return true;
+}
+
+bool ClientOwnsTrack(const ClientConnection& pClient, int pTrackIndex)
+{
+    if (pTrackIndex < 0 || pTrackIndex >= static_cast<int>(gServerTracks.size()))
+        return false;
+    if (pTrackIndex < static_cast<int>(BuiltInTracks().size()))
+        return true;
+    return pClient.mOwnedTrackHashes.count(gServerTrackHashes[pTrackIndex]) != 0;
+}
+
+std::string TrackListMessage(int pIndex)
+{
+    return "TRACK " + std::to_string(pIndex) + "|" + gServerTracks[pIndex].mId + "|"
+        + gServerTracks[pIndex].mName + "|" + gServerTrackHashes[pIndex];
+}
 
 double MonotonicSeconds()
 {
@@ -313,6 +352,32 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
     pClients.erase(pClients.begin() + pIndex);
 }
 
+// A room's track can only be set to one that every player in the room has, with identical files.
+// Championships rotate through the built-in tracks, so they cannot use a custom one.
+bool TrackAllowedForRoom(const LobbyRaceSettings& pSettings, LobbyRoomId pRoomId, const Lobby& pLobby,
+                         const std::vector<ClientConnection>& pClients)
+{
+    if (pSettings.mTrackIndex < 0 || pSettings.mTrackIndex >= static_cast<int>(gServerTracks.size()))
+        return false;
+    if (pSettings.mRaceMode == RaceMode::Championship
+        && pSettings.mTrackIndex >= static_cast<int>(BuiltInTracks().size()))
+        return false;
+    for (const LobbyRoom& room : pLobby.Rooms())
+    {
+        if (room.mId != pRoomId)
+            continue;
+        for (LobbyPlayerId playerId : room.mPlayerIds)
+        {
+            for (const ClientConnection& client : pClients)
+            {
+                if (client.mPlayerId == playerId && !ClientOwnsTrack(client, pSettings.mTrackIndex))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& pLobby,
                    std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
                    std::map<LobbyRoomId, Championship>& pChampionships,
@@ -347,6 +412,9 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             SendLine(pClient, "WELCOME " + std::to_string(pClient.mPlayerId) + "|"
                 + std::to_string(kOpenHoverProtocolVersion) + "|"
                 + std::to_string(kOpenHoverContentVersion) + "|" + OPENHOVER_VERSION);
+            SendLine(pClient, "TRACKS " + std::to_string(gServerTracks.size()));
+            for (int index = 0; index < static_cast<int>(gServerTracks.size()); ++index)
+                SendLine(pClient, TrackListMessage(index));
             BroadcastLobbySnapshot(pLobby, pClients);
             BroadcastLobbyNotice(helloFields[2] + " JOINED LOBBY", pClients);
         }
@@ -357,6 +425,16 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
     if (pClient.mPlayerId == 0)
     {
         SendLine(pClient, "ERROR hello required");
+        return;
+    }
+    if (command == "OWN")
+    {
+        if (IsHexHash(argument) && pClient.mOwnedTrackHashes.size() < kMaximumOwnedTracks)
+        {
+            pClient.mOwnedTrackHashes.insert(argument);
+            return;
+        }
+        SendLine(pClient, "ERROR invalid track declaration");
         return;
     }
     if (command == "CHAT")
@@ -430,7 +508,7 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         LobbyRaceSettings settings;
         LobbyRoomId roomId = 0;
         std::string roomName;
-        const std::vector<TrackDefinition>& tracks = BuiltInTracks();
+        const std::vector<TrackDefinition>& tracks = gServerTracks;
         const std::size_t privacySeparator = argument.rfind('|');
         int privateRoom = 0;
         const bool parsedPrivacy = privacySeparator != std::string::npos
@@ -453,6 +531,17 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             && settings.mTrackIndex >= 0
             && settings.mTrackIndex < static_cast<int>(tracks.size()))
         {
+            if (!ClientOwnsTrack(pClient, settings.mTrackIndex))
+            {
+                SendLine(pClient, "ERROR MISSING TRACK " + tracks[settings.mTrackIndex].mName);
+                return;
+            }
+            if (settings.mRaceMode == RaceMode::Championship
+                && settings.mTrackIndex >= static_cast<int>(BuiltInTracks().size()))
+            {
+                SendLine(pClient, "ERROR CHAMPIONSHIP NEEDS BUILT-IN TRACKS");
+                return;
+            }
             roomName = tracks[settings.mTrackIndex].mName;
             if (pLobby.CreateRoom(pClient.mPlayerId, roomName, settings, roomId,
                                   privateRoom != 0, joinCode))
@@ -488,6 +577,9 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             SendLine(pClient, "ERROR already in room");
         else if (static_cast<int>(requestedRoom->mPlayerIds.size()) >= requestedRoom->mSettings.mPlayerCapacity)
             SendLine(pClient, "ERROR room full");
+        else if (!ClientOwnsTrack(pClient, requestedRoom->mSettings.mTrackIndex))
+            SendLine(pClient, "ERROR MISSING TRACK "
+                + gServerTracks[requestedRoom->mSettings.mTrackIndex].mName);
         else if (pLobby.JoinRoom(pClient.mPlayerId, requestedRoom->mId))
         {
             SendLine(pClient, "JOINED " + std::to_string(requestedRoom->mId));
@@ -515,6 +607,9 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         else if (static_cast<int>(requestedRoom->mPlayerIds.size())
                  >= requestedRoom->mSettings.mPlayerCapacity)
             SendLine(pClient, "ERROR room full");
+        else if (!ClientOwnsTrack(pClient, requestedRoom->mSettings.mTrackIndex))
+            SendLine(pClient, "ERROR MISSING TRACK "
+                + gServerTracks[requestedRoom->mSettings.mTrackIndex].mName);
         else if (pLobby.JoinRoom(pClient.mPlayerId, requestedRoom->mId))
         {
             SendLine(pClient, "JOINED " + std::to_string(requestedRoom->mId));
@@ -567,7 +662,7 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
                               requestedRoom->mSettings.mLapCount,
                               requestedRoom->mSettings.mWeaponsAllowed,
                               requestedRoom->mSettings.mRivalCount,
-                              requestedRoom->mSettings.mRaceMode)
+                              requestedRoom->mSettings.mRaceMode, &gServerTracks)
                 && pLobby.StartRace(pClient.mPlayerId, requestedRoom->mId))
             {
                 pRaces[requestedRoom->mId] = std::move(race);
@@ -630,6 +725,8 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         if (roomSeparator != std::string::npos
             && ParseInteger(argument.substr(0, roomSeparator), roomId)
             && ParseRoomFields("settings|" + argument.substr(roomSeparator + 1), ignoredName, settings)
+            && settings.mTrackIndex < static_cast<int>(gServerTracks.size())
+            && TrackAllowedForRoom(settings, static_cast<LobbyRoomId>(roomId), pLobby, pClients)
             && pLobby.UpdateRoomSettings(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId), settings))
         {
             BroadcastLobbySnapshot(pLobby, pClients);
@@ -643,29 +740,61 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
 int main(int pArgumentCount, char* pArguments[])
 {
     int port = kDefaultPort;
-    if (pArgumentCount == 2 && std::string(pArguments[1]) == "--version")
+    std::string trackDirectory;
+    for (int index = 1; index < pArgumentCount; ++index)
     {
-        std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
-                  << ") protocol=" << kOpenHoverProtocolVersion
-                  << " content=" << kOpenHoverContentVersion << "\n";
-        return 0;
-    }
-    if (pArgumentCount == 3 && std::string(pArguments[1]) == "--port"
-        && !ParseInteger(pArguments[2], port))
-    {
-        std::cerr << "Invalid port\n";
-        return 1;
-    }
-    if (pArgumentCount != 1 && pArgumentCount != 3)
-    {
-        std::cerr << "Usage: OpenHoverServer [--port PORT] [--version]\n";
-        return 1;
+        const std::string option = pArguments[index];
+        if (option == "--version" && pArgumentCount == 2)
+        {
+            std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
+                      << ") protocol=" << kOpenHoverProtocolVersion
+                      << " content=" << kOpenHoverContentVersion << "\n";
+            return 0;
+        }
+        if (option == "--port" && index + 1 < pArgumentCount)
+        {
+            if (!ParseInteger(pArguments[++index], port))
+            {
+                std::cerr << "Invalid port\n";
+                return 1;
+            }
+        }
+        else if (option == "--tracks" && index + 1 < pArgumentCount)
+            trackDirectory = pArguments[++index];
+        else
+        {
+            std::cerr << "Usage: OpenHoverServer [--port PORT] [--tracks DIRECTORY] [--version]\n";
+            return 1;
+        }
     }
     if (port < 1 || port > 65535)
     {
         std::cerr << "Port must be between 1 and 65535\n";
         return 1;
     }
+
+    // Built-in tracks first, then custom tracks installed on this server. Only plain-text ids and
+    // names are hosted, because they travel in protocol fields.
+    gServerTracks = BuiltInTracks();
+    if (!trackDirectory.empty())
+    {
+        std::vector<std::string> trackMessages;
+        for (const TrackDefinition& track : LoadCustomTracks(trackDirectory, gServerTracks, trackMessages))
+        {
+            if (IsOnlineSafeTrack(track))
+                gServerTracks.push_back(track);
+            else
+                trackMessages.push_back(track.mId + ": skipped, id and name must be 1-24 letters, digits, "
+                                        "spaces, '.', '_' or '-'");
+        }
+        for (const std::string& message : trackMessages)
+            std::cout << "custom_track_skipped " << message << std::endl;
+    }
+    for (const TrackDefinition& track : gServerTracks)
+        gServerTrackHashes.push_back(TrackHash(track));
+    for (std::size_t index = BuiltInTracks().size(); index < gServerTracks.size(); ++index)
+        std::cout << "custom_track id=" << gServerTracks[index].mId
+                  << " hash=" << gServerTrackHashes[index] << std::endl;
 
     const int listenSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (listenSocket < 0)
@@ -808,7 +937,7 @@ int main(int pArgumentCount, char* pArguments[])
                         AuthoritativeRace nextRace;
                         if (room != nullptr && nextRace.Start(room->mPlayerIds, nextTrack,
                             room->mSettings.mLapCount, room->mSettings.mWeaponsAllowed,
-                            room->mSettings.mRivalCount, room->mSettings.mRaceMode))
+                            room->mSettings.mRivalCount, room->mSettings.mRaceMode, &gServerTracks))
                         {
                             race->second = std::move(nextRace);
                             BroadcastRaceEvent(race->first, nextTrack, championship->second,

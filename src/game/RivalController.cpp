@@ -6,6 +6,13 @@
 
 namespace
 {
+const double kAvoidanceHorizon = 16.0;
+const double kAvoidanceMinimumAhead = 1.5;
+const double kAvoidanceLane = 4.2;
+const double kAvoidanceAlongsideBehind = 1.0;
+const double kAvoidanceAlongsideLane = 3.0;
+const double kAvoidanceBrakeDistance = 6.0;
+
 const double kPi = 3.14159265358979323846;
 
 double Clamp(double pValue, double pMinimum, double pMaximum)
@@ -97,6 +104,12 @@ void RivalController::Update(const HovercraftState& pState)
 
 HovercraftInput RivalController::InputFor(const HovercraftState& pState) const
 {
+    return InputFor(pState, std::vector<HovercraftState>());
+}
+
+HovercraftInput RivalController::InputFor(const HovercraftState& pState,
+                                          const std::vector<HovercraftState>& pOthers) const
+{
     HovercraftInput input;
     if (mRoute.empty())
         return input;
@@ -124,6 +137,43 @@ HovercraftInput RivalController::InputFor(const HovercraftState& pState) const
     const double desiredHeading = std::atan2(aimY - pState.mY, aimX - pState.mX);
     const double headingError = WrapAngle(desiredHeading - pState.mHeading);
     input.mThrottle = Clamp(mTuning.mPace, 0.0, 1.0);
-    input.mSteering = Clamp(headingError * mTuning.mSteeringGain, -1.0, 1.0);
+    double steering = headingError * mTuning.mSteeringGain;
+
+    // Avoidance: find the closest craft that is ahead and in our lane, and push the steering to
+    // the side it is not on. Craft level with us (the start grid) are ignored.
+    const double forwardX = std::cos(pState.mHeading);
+    const double forwardY = std::sin(pState.mHeading);
+    // Look further ahead the faster we go, so there is room to steer around a craft.
+    const double horizon = kAvoidanceHorizon + std::fabs(pState.mSpeed) * 0.8;
+    double nearestAhead = horizon;
+    double blockerSide = 0.0;
+    for (const HovercraftState& other : pOthers)
+    {
+        const double relativeX = other.mX - pState.mX;
+        const double relativeY = other.mY - pState.mY;
+        const double ahead = relativeX * forwardX + relativeY * forwardY;
+        const double side = forwardX * relativeY - forwardY * relativeX; // left is positive
+        // A craft just alongside counts as touching distance, so the rival does not cut back
+        // across it the moment it has steered clear of the nose.
+        const bool alongside = ahead > -kAvoidanceAlongsideBehind && ahead <= kAvoidanceMinimumAhead
+            && std::fabs(side) < kAvoidanceAlongsideLane;
+        const bool inLane = ahead > kAvoidanceMinimumAhead && ahead < horizon
+            && std::fabs(side) < kAvoidanceLane;
+        const double effectiveAhead = alongside ? 0.0 : ahead;
+        if ((alongside || inLane) && effectiveAhead < nearestAhead)
+        {
+            nearestAhead = effectiveAhead;
+            blockerSide = side;
+        }
+    }
+    if (nearestAhead < horizon)
+    {
+        const double urgency = 1.0 - nearestAhead / horizon;
+        const double direction = blockerSide > 0.0 ? -1.0 : 1.0;
+        steering += direction * (0.35 + 0.65 * urgency);
+        if (nearestAhead < kAvoidanceBrakeDistance)
+            input.mThrottle *= 0.85;
+    }
+    input.mSteering = Clamp(steering, -1.0, 1.0);
     return input;
 }

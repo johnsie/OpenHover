@@ -110,7 +110,7 @@ visible beside connection status so players and support staff can identify the e
 
 ## Compatibility Policy
 
-The current compatibility tuple is protocol `5`, built-in content `2`. A client may enter the
+The current compatibility tuple is protocol `6`, built-in content `2`. A client may enter the
 lobby only when both values exactly match the server; this release does not attempt mixed-version
 simulation or silently downgrade features.
 
@@ -187,3 +187,26 @@ the server-side `/usr/local/sbin/openhover-deploy` wrapper, which validates that
 the artifact is an OpenHover package within the GitLab build directory before
 installing it as `openhover-raceserver.service`. The service listens on TCP port
 `9700`.
+
+## Custom Tracks Online
+
+A server operator installs custom tracks by starting `OpenHoverServer --tracks <folder>`. The
+server loads every valid `.ohtrack` file in that folder (see [track format](track-format.md)),
+skips any whose `id` or `name` is not plain text of up to 24 letters, digits, spaces, `.`, `_` or
+`-`, and logs each hosted track's id and hash at startup.
+
+Identity is a SHA-256 hash of the track's canonical text form, so comments and spacing in a file
+do not matter but any change to geometry, items, colours, or the `id` does. Rooms refer to a track
+by its index in the server's list: the built-in tracks first, then the custom tracks in name order.
+
+After `WELCOME` the server sends `TRACKS <count>` and one `TRACK <index>|<id>|<name>|<hash>` line
+per track. The client replies with one `OWN <hash>` line for each custom track it has (at most 64;
+built-in tracks are implied by the content version). The server then enforces ownership:
+`CREATE`, `JOIN`, `JOINCODE`, and `SET` are refused with `ERROR MISSING TRACK <name>` unless the
+player has a track with the matching hash, and `SET` also requires that every player already in
+the room has it. Championship rooms are limited to the built-in tracks. The client shows a room's
+track from its own copy, and shows "YOU NEED THIS TRACK FILE" when it does not have one.
+
+The hash is an agreement check, not anti-cheat: a client declares what it has and the server
+simulates the race, so a mismatch can only cause a client to draw a different course than the one
+being raced, which the check prevents for honest clients.

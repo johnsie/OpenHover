@@ -32,8 +32,9 @@ add_library(openhover_content STATIC src/content/TrackCatalog.cpp src/content/Tr
 target_include_directories(openhover_content PUBLIC src/content)
 target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 
-add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
+add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/TrackFile.cpp src/game/TrackHash.cpp src/game/TrackLoader.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
+target_link_libraries(openhover_game PUBLIC openhover_util)
 
 # Keyboard bindings use SDL scancodes, so they live apart from the SDL-free game and server code.
 add_library(openhover_input STATIC src/game/KeyBindings.cpp src/game/PadBindings.cpp src/game/PadMenuInput.cpp)
@@ -51,6 +52,9 @@ if(UNIX)
         OPENHOVER_VERSION="${OPENHOVER_PACKAGE_VERSION}"
         OPENHOVER_SOURCE_REVISION="${OPENHOVER_SOURCE_REVISION}")
 endif()
+
+add_executable(OpenHoverTrackCheck src/tools/TrackCheck.cpp)
+target_link_libraries(OpenHoverTrackCheck PRIVATE openhover_game)
 
 add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
 target_link_libraries(OpenHover PRIVATE openhover_game openhover_input openhover_lobby SDL2::SDL2 OpenGL::GL)
@@ -122,6 +126,26 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(SteeringAssistSmoke tests/SteeringAssistSmoke.cpp)
     target_link_libraries(SteeringAssistSmoke PRIVATE openhover_game)
     add_test(NAME SteeringAssistSmoke COMMAND SteeringAssistSmoke)
+
+    add_executable(TrackHashSmoke tests/TrackHashSmoke.cpp)
+    target_link_libraries(TrackHashSmoke PRIVATE openhover_game)
+    add_test(NAME TrackHashSmoke COMMAND TrackHashSmoke)
+
+    add_executable(TrackLoaderSmoke tests/TrackLoaderSmoke.cpp)
+    target_link_libraries(TrackLoaderSmoke PRIVATE openhover_game)
+    add_test(NAME TrackLoaderSmoke COMMAND TrackLoaderSmoke)
+
+    add_executable(TrackFileSmoke tests/TrackFileSmoke.cpp)
+    target_link_libraries(TrackFileSmoke PRIVATE openhover_game)
+    add_test(NAME TrackFileSmoke COMMAND TrackFileSmoke)
+
+    add_executable(TrackWallSmoke tests/TrackWallSmoke.cpp)
+    target_link_libraries(TrackWallSmoke PRIVATE openhover_game)
+    add_test(NAME TrackWallSmoke COMMAND TrackWallSmoke)
+
+    add_executable(TrackRecoverySmoke tests/TrackRecoverySmoke.cpp)
+    target_link_libraries(TrackRecoverySmoke PRIVATE openhover_game)
+    add_test(NAME TrackRecoverySmoke COMMAND TrackRecoverySmoke)
 
     add_executable(RecoveryAssistSmoke tests/RecoveryAssistSmoke.cpp)
     target_link_libraries(RecoveryAssistSmoke PRIVATE openhover_game)
@@ -237,13 +261,17 @@ if(BUILD_TESTING AND NOT WIN32)
     add_test(NAME LobbySmoke COMMAND LobbySmoke)
 
     if(UNIX)
+        add_executable(CustomTrackLobbySmoke tests/CustomTrackLobbySmoke.cpp)
+        target_link_libraries(CustomTrackLobbySmoke PRIVATE openhover_lobby)
+        add_test(NAME CustomTrackLobbySmoke COMMAND CustomTrackLobbySmoke $<TARGET_FILE:OpenHoverServer>)
+
         add_executable(LobbyClientSmoke tests/LobbyClientSmoke.cpp)
         target_link_libraries(LobbyClientSmoke PRIVATE openhover_lobby)
         add_test(NAME LobbyClientSmoke COMMAND LobbyClientSmoke $<TARGET_FILE:OpenHoverServer>)
 
         add_test(NAME ServerVersionSmoke COMMAND OpenHoverServer --version)
         set_tests_properties(ServerVersionSmoke PROPERTIES
-            PASS_REGULAR_EXPRESSION "protocol=5 content=2")
+            PASS_REGULAR_EXPRESSION "protocol=6 content=2")
     endif()
 
     add_executable(TrackLapTimeSmoke tests/TrackLapTimeSmoke.cpp)

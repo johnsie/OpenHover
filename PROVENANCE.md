@@ -138,6 +138,19 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/PadMenuInput.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | gamepad-to-menu-key mapping API |
 | `src/game/PadMenuInput.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | D-pad, A, B and Start menu mapping |
 | `tests/PadMenuInputSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | gamepad menu mapping test |
+| `tests/TrackRecoverySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | recovery from off-road positions on every built-in track |
+| `tests/TrackWallSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | wall containment on every built-in track |
+| `src/game/TrackFile.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track file text format API |
+| `src/game/TrackFile.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track file parser and serializer |
+| `src/tools/TrackCheck.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | command-line track validator |
+| `tests/TrackFileSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track file round-trip and rejection test |
+| `src/game/TrackLoader.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | custom track folder loader API |
+| `src/game/TrackLoader.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | loads and validates custom track files |
+| `tests/TrackLoaderSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | custom track loading and rejection test |
+| `tests/CustomTrackLobbySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | custom track hash enforcement against a real server |
+| `src/game/TrackHash.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track content hash and online-safe name API |
+| `src/game/TrackHash.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | SHA-256 of canonical track text |
+| `tests/TrackHashSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track hash stability and sensitivity test |
 | `src/game/GhostLibrary.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best-run ghost store API |
 | `src/game/GhostLibrary.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best ghost selection and versioned persistence |
 | `tests/GhostLibrarySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ghost selection and persistence test |

@@ -3,6 +3,36 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.15
+
+- Tracks can now be written as text files and checked with the new `OpenHoverTrackCheck` tool;
+  see `docs/track-format.md`. Put valid `.ohtrack` files in the `tracks` folder next to your
+  settings (on Linux, `~/.local/share/OpenHover/OpenHover/tracks/`) and they appear after the
+  built-in tracks in the local race setup. Invalid files are skipped with a reason printed to the
+  terminal. Custom tracks can also be raced online, with the exact file checked: see below.
+- Online custom tracks. A race server started with `--tracks <folder>` also hosts the valid
+  custom tracks in that folder. Each track is identified by a SHA-256 hash of its canonical text,
+  so players need the identical track, not just one with the same name. The server publishes the
+  list with hashes; your game tells the server which custom tracks you have; and the server
+  refuses to create, join, or switch to a room whose track you do not have byte-for-byte. A room
+  on a track you lack shows "YOU NEED THIS TRACK FILE". Track ids and names must be plain text
+  (letters, digits, spaces, `.`, `_`, `-`, up to 24 characters) to be hosted. Championships still
+  use the built-in tracks. This changes the protocol (now version 6), so update the client and
+  server together. Set `OPENHOVER_SERVER=host:port` to point the game at another server.
+- Press **Alt** during a local race to show or hide your best-run ghost; the choice is saved.
+- Recovering to the road now always faces you along the route. It used to aim at the next gate,
+  which on a winding track could point into a wall or back the way you came. Local and online
+  races share this behaviour.
+- How To Play now shows your current key and gamepad bindings (including any remapping), the
+  pause and Key Bindings shortcut, and points to the flashing wall arrows.
+- All on-screen text now has a dark drop shadow, so it stays readable over bright road, sky, and
+  walls. The fuel and missile bars moved below the lap-progress squares they used to overlap, and
+  their labels no longer run into the bars.
+- AI rivals now steer around craft ahead of them, including the player and each other, instead of
+  driving through them, and ease off slightly when very close. Looking distance grows with speed.
+  This applies to local and online races alike. A full grid of seven rivals still finishes every
+  track, with a more natural spread of finishing times.
+
 ## 0.1.14
 
 ### Tracks

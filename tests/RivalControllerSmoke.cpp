@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "RivalController.h"
 
+#include <cmath>
 #include <iostream>
 #include <vector>
 
@@ -68,5 +69,61 @@ int main()
         return 1;
     }
 
+    // Avoidance: a craft close ahead pushes the steering to the other side; others are ignored.
+    std::vector<RaceGate> straight = {{200.0, 0.0, 3.0}, {400.0, 0.0, 3.0}};
+    RivalController racer(straight);
+    HovercraftState self;
+    self.mHeading = 0.0;
+    const double freeSteering = racer.InputFor(self).mSteering;
+    HovercraftState blocker;
+    blocker.mX = 8.0;
+    blocker.mY = 1.0; // slightly to the left (positive y is left of heading 0)
+    const HovercraftInput leftBlocked = racer.InputFor(self, {blocker});
+    blocker.mY = -1.0;
+    const HovercraftInput rightBlocked = racer.InputFor(self, {blocker});
+    HovercraftState farAway = blocker;
+    farAway.mX = 60.0;
+    HovercraftState behind = blocker;
+    behind.mX = -8.0;
+    HovercraftState level = blocker;
+    level.mX = 0.5;
+    level.mY = 3.2; // a start-grid neighbour beside us
+    HovercraftState otherLane = blocker;
+    otherLane.mY = 9.0;
+    if (leftBlocked.mSteering >= freeSteering - 0.3 || rightBlocked.mSteering <= freeSteering + 0.3
+        || racer.InputFor(self, {farAway}).mSteering != freeSteering
+        || racer.InputFor(self, {behind}).mSteering != freeSteering
+        || racer.InputFor(self, {level}).mSteering != freeSteering
+        || racer.InputFor(self, {otherLane}).mSteering != freeSteering)
+    {
+        std::cerr << "rival avoidance did not steer away from a close craft ahead only\n";
+        return 1;
+    }
+
+    // Driving past a parked craft in the middle of a wide road without touching it.
+    std::vector<RaceGate> longRoad = {{300.0, 0.0, 3.0}, {600.0, 0.0, 3.0}};
+    RivalController passer(longRoad);
+    Hovercraft craft;
+    HovercraftState start;
+    start.mX = -40.0;
+    craft.Reset(start);
+    HovercraftState parked;
+    parked.mX = 0.0;
+    double closest = 1e9;
+    for (int step = 0; step < 120 * 10; ++step)
+    {
+        passer.Update(craft.State());
+        craft.Step(passer.InputFor(craft.State(), {parked}), 1.0 / 120.0);
+        const HovercraftState& now = craft.State();
+        const double gap = std::hypot(now.mX - parked.mX, now.mY - parked.mY);
+        if (gap < closest)
+            closest = gap;
+    }
+    if (closest < 2.2 || craft.State().mX < 40.0)
+    {
+        std::cerr << "rival did not pass a parked craft cleanly: closest " << closest
+                  << " m, ended at x=" << craft.State().mX << "\n";
+        return 1;
+    }
     return 0;
 }

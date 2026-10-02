@@ -23,3 +23,33 @@ rejected with a message naming the problem.
 Track provenance contains the author, licence, and source-asset origin. Each distributed package
 must additionally record its content hash in package metadata before it can be accepted into an
 OpenHover release. Built-in tracks are compiled definitions and therefore have no package hash.
+
+## Track file text format
+
+Tracks can be written as plain text and checked with `OpenHoverTrackCheck <file> [...]`, which
+prints `ok` or the first problem for each file and exits non-zero if any file fails. The first
+line is `openhover-track 1`. After that, one directive per line; blank lines and lines starting
+with `#` are ignored.
+
+| Directive | Arguments |
+| --- | --- |
+| `id`, `name`, `author`, `license`, `origin` | the rest of the line (text) |
+| `road-half-width` | width |
+| `atmosphere`, `road-colour`, `wall-colour` | red green blue, each 0 to 1 |
+| `waypoint`, `checkpoint`, `boost-pad`, `mine` | x y radius |
+| `hazard` | x y radius speed-loss-per-second |
+| `raised` | x y half-length half-width heading clear-height driveable (0 or 1) |
+
+Waypoints and checkpoints are listed in driving order, starting with the finish. A file that
+parses can still fail validation; the checker runs both, so every rule above applies.
+
+## Playing a custom track
+
+Copy a valid `.ohtrack` file into the `tracks` folder inside OpenHover's per-user data folder (on
+Linux, `~/.local/share/OpenHover/OpenHover/tracks/`; SDL reports the equivalent folder on other
+systems). At startup the game loads every file ending in `.ohtrack`, in name order, up to 32
+files of at most 1 MiB each. A file is skipped, with the reason printed to standard error, if it
+does not parse, fails validation, or reuses an `id` or `name` already used by a built-in or
+earlier custom track. Custom tracks appear after the built-in ones in the local race track
+list. They are not available in championships. They can be raced online when the server has the
+identical file; see [multiplayer](multiplayer.md#custom-tracks-online).

@@ -43,9 +43,11 @@ bool ShouldJumpRaisedSection(const HovercraftState& pState,
 
 bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex,
                               int pTargetLaps, bool pWeaponsAllowed, int pRivalCount,
-                              RaceMode pRaceMode)
+                              RaceMode pRaceMode, const std::vector<TrackDefinition>* pTracks)
 {
-    const std::vector<TrackDefinition>& tracks = BuiltInTracks();
+    // The server passes its own list (built-in plus installed custom tracks); tests use the
+    // built-in tracks.
+    const std::vector<TrackDefinition>& tracks = pTracks != nullptr ? *pTracks : BuiltInTracks();
     if (pPlayerIds.empty() || pTrackIndex < 0 || pTrackIndex >= static_cast<int>(tracks.size())
         || pTargetLaps < 1)
         return false;
@@ -147,6 +149,15 @@ void AuthoritativeRace::Step()
     }
     for (Racer& racer : mRacers)
     {
+        std::vector<HovercraftState> others;
+        if (racer.mRivalController)
+        {
+            for (const Racer& other : mRacers)
+            {
+                if (&other != &racer)
+                    others.push_back(other.mHovercraft.State());
+            }
+        }
         if (racer.mRecoverRequested)
         {
             const RaceProgress& progress = racer.mRace.Progress();
@@ -160,7 +171,7 @@ void AuthoritativeRace::Step()
         if (racer.mRivalController)
         {
             racer.mRivalController->Update(racer.mHovercraft.State());
-            racer.mInput = racer.mRivalController->InputFor(racer.mHovercraft.State());
+            racer.mInput = racer.mRivalController->InputFor(racer.mHovercraft.State(), others);
             racer.mInput.mJump = ShouldJumpRaisedSection(racer.mHovercraft.State(), mRaisedSections);
         }
         HovercraftInput input = racer.mInput;

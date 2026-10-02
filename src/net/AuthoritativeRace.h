@@ -17,6 +17,7 @@
 #include "RecoveryAssist.h"
 #include "RaisedSection.h"
 #include "RivalController.h"
+#include "TrackDefinition.h"
 
 #include <memory>
 #include <vector>
@@ -68,7 +69,8 @@ class AuthoritativeRace
 public:
     bool Start(const std::vector<LobbyPlayerId>& pPlayerIds, int pTrackIndex, int pTargetLaps = 3,
                bool pWeaponsAllowed = true, int pRivalCount = 0,
-               RaceMode pRaceMode = RaceMode::SingleRace);
+               RaceMode pRaceMode = RaceMode::SingleRace,
+               const std::vector<TrackDefinition>* pTracks = nullptr);
     bool SubmitInput(const RaceInputCommand& pCommand);
     void Step();
     void Stop();

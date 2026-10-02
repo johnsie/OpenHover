@@ -32,6 +32,8 @@
 #include "RouteGuidance.h"
 #include "SteeringAssist.h"
 #include "TrackDefinition.h"
+#include "TrackHash.h"
+#include "TrackLoader.h"
 #include "TcpLobbyClient.h"
 #include "WallCollision.h"
 
@@ -2097,33 +2099,44 @@ void DrawPixelText(const char* pText, int pLeft, int pTop, int pScale)
         {0x00,0x00,0x11,0x11,0x0f,0x01,0x0e},{0x00,0x00,0x1f,0x02,0x04,0x08,0x1f},
         {0x0e,0x11,0x01,0x02,0x04,0x00,0x04}
     };
-    int cursorX = pLeft;
-    glBegin(GL_QUADS);
-    for (const char* character = pText; *character != '\0'; ++character)
+    const auto drawGlyphs = [&](int pOffsetX, int pOffsetY)
     {
-        const int glyphIndex = PixelGlyphIndex(*character);
-        if (glyphIndex < 0)
+        int cursorX = pLeft + pOffsetX;
+        glBegin(GL_QUADS);
+        for (const char* character = pText; *character != '\0'; ++character)
         {
-            cursorX += pScale * 4;
-            continue;
-        }
-        for (int row = 0; row < 7; ++row)
-        {
-            for (int column = 0; column < 5; ++column)
+            const int glyphIndex = PixelGlyphIndex(*character);
+            if (glyphIndex < 0)
             {
-                if ((kGlyphs[glyphIndex][row] & (1 << (4 - column))) == 0)
-                    continue;
-                const int left = cursorX + column * pScale;
-                const int top = pTop + row * pScale;
-                glVertex2i(left, top);
-                glVertex2i(left + pScale, top);
-                glVertex2i(left + pScale, top + pScale);
-                glVertex2i(left, top + pScale);
+                cursorX += pScale * 4;
+                continue;
             }
+            for (int row = 0; row < 7; ++row)
+            {
+                for (int column = 0; column < 5; ++column)
+                {
+                    if ((kGlyphs[glyphIndex][row] & (1 << (4 - column))) == 0)
+                        continue;
+                    const int left = cursorX + column * pScale;
+                    const int top = pTop + pOffsetY + row * pScale;
+                    glVertex2i(left, top);
+                    glVertex2i(left + pScale, top);
+                    glVertex2i(left + pScale, top + pScale);
+                    glVertex2i(left, top + pScale);
+                }
+            }
+            cursorX += pScale * 6;
         }
-        cursorX += pScale * 6;
-    }
-    glEnd();
+        glEnd();
+    };
+    // A dark drop shadow keeps text legible over bright road, sky, and walls, whatever its colour.
+    GLfloat textColour[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glGetFloatv(GL_CURRENT_COLOR, textColour);
+    const int shadowOffset = pScale >= 3 ? pScale / 2 : 1;
+    glColor3f(0.0f, 0.02f, 0.04f);
+    drawGlyphs(shadowOffset, shadowOffset);
+    glColor4fv(textColour);
+    drawGlyphs(0, 0);
 }
 
 int PixelTextWidth(const std::string& pText, int pScale)
@@ -2144,7 +2157,83 @@ void DrawSetupOverlay(int pWidth, int pHeight)
 }
 
 std::string gRaceWinnerName;
+// Built-in tracks first, then any valid custom tracks from the player's tracks folder. Online
+// rooms only ever use the built-in tracks at the front of this list.
+std::vector<TrackDefinition> gLocalTracks;
+
+std::string LocalTrackName(int pIndex)
+{
+    if (pIndex < 0 || pIndex >= static_cast<int>(gLocalTracks.size()))
+        return std::string();
+    std::string name = gLocalTracks[pIndex].mName;
+    for (char& c : name)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (name.size() > 22)
+        name.resize(22);
+    return name;
+}
+
+// Hash of each entry in gLocalTracks, in the same order.
+std::vector<std::string> gLocalTrackHashes;
+
+// The tracks the connected server offers, with the hash of each. Rooms refer to a track by its
+// index in this list.
+struct ServerTrackView
+{
+    std::string mId;
+    std::string mName;
+    std::string mHash;
+};
+std::vector<ServerTrackView> gServerTracks;
+
+// Index into gLocalTracks of the file that is byte-for-byte the server's track (same id and
+// same hash), or -1 when this player does not have it.
+int LocalIndexForServerTrack(int pServerIndex)
+{
+    if (pServerIndex < 0 || pServerIndex >= static_cast<int>(gServerTracks.size()))
+        return -1;
+    const ServerTrackView& wanted = gServerTracks[pServerIndex];
+    for (int index = 0; index < static_cast<int>(gLocalTracks.size())
+         && index < static_cast<int>(gLocalTrackHashes.size()); ++index)
+    {
+        if (gLocalTracks[index].mId == wanted.mId && gLocalTrackHashes[index] == wanted.mHash)
+            return index;
+    }
+    return -1;
+}
+
+// Number of tracks a host can pick from: the server's list once received, else the built-ins.
+int HostableTrackCount()
+{
+    return gServerTracks.empty() ? 3 : static_cast<int>(gServerTracks.size());
+}
+
+// Next host track in a direction, skipping tracks this player does not have.
+int NextHostTrack(int pCurrent, int pDirection)
+{
+    const int count = HostableTrackCount();
+    for (int step = 1; step <= count; ++step)
+    {
+        const int candidate = ((pCurrent + pDirection * step) % count + count) % count;
+        if (gServerTracks.empty() || LocalIndexForServerTrack(candidate) >= 0)
+            return candidate;
+    }
+    return pCurrent;
+}
+
+std::string HostTrackName(int pServerIndex)
+{
+    if (pServerIndex >= 0 && pServerIndex < static_cast<int>(gServerTracks.size()))
+    {
+        std::string name = gServerTracks[pServerIndex].mName;
+        for (char& c : name)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return name;
+    }
+    return LocalTrackName(pServerIndex);
+}
 bool gNewGhostBest = false;
+bool gGhostVisible = true;
 double gGhostSecondsBeforeRace = 0.0; // best ghost time when this race began, 0 if none
 GhostLibrary gGhostLibrary;
 // Name pool index for each local rival slot, redrawn at every race start so no two rivals share
@@ -2622,7 +2711,7 @@ void DrawLobbyButton(const char* pLabel, int pLeft, int pTop, int pWidth, bool p
 
 void DrawTrackMinimap(int pTrackIndex, int pLeft, int pTop, int pSize)
 {
-    const std::vector<TrackDefinition>& tracks = BuiltInTracks();
+    const std::vector<TrackDefinition>& tracks = gLocalTracks;
     if (pTrackIndex < 0 || pTrackIndex >= static_cast<int>(tracks.size())
         || tracks[pTrackIndex].mWaypoints.size() < 2)
     {
@@ -2874,14 +2963,27 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         if (gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
         {
             const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
-            const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
-            const int validTrackIndex = room.mTrackIndex >= 0 && room.mTrackIndex < 3 ? room.mTrackIndex : 0;
-            DrawTrackMinimap(validTrackIndex, previewLeft, previewTop, previewSize);
+            // Preview the room's track from this player's own copy; if they lack the identical
+            // file there is no preview, and joining is refused by the server.
+            const int previewTrack = LocalIndexForServerTrack(room.mTrackIndex) >= 0
+                ? LocalIndexForServerTrack(room.mTrackIndex)
+                : (gServerTracks.empty() && room.mTrackIndex >= 0 && room.mTrackIndex < 3
+                       ? room.mTrackIndex : -1);
+            const std::string previewTrackName = previewTrack >= 0 || !gServerTracks.empty()
+                ? HostTrackName(room.mTrackIndex) : std::string("TRACK");
+            if (previewTrack >= 0)
+                DrawTrackMinimap(previewTrack, previewLeft, previewTop, previewSize);
             const std::string players = std::to_string(room.mPlayerCount) + " OF "
                 + std::to_string(room.mPlayerCapacity) + " PLAYERS";
             DrawPixelText(room.mName.c_str(), previewLeft + previewSize + 16, previewTop + 4, 2);
             DrawPixelText(players.c_str(), previewLeft + previewSize + 16, previewTop + 28, 2);
-            DrawPixelText(trackNames[validTrackIndex], previewLeft + previewSize + 16, previewTop + 52, 2);
+            DrawPixelText(previewTrackName.c_str(), previewLeft + previewSize + 16, previewTop + 52, 2);
+            if (previewTrack < 0)
+            {
+                glColor3f(1.0f, 0.3f, 0.2f);
+                DrawPixelText("YOU NEED THIS TRACK FILE", previewLeft, previewTop + previewSize + 8, 2);
+                glColor3f(0.66f, 0.66f, 0.73f);
+            }
             const std::string settings = std::to_string(room.mLapCount) + " LAPS  "
                 + std::to_string(room.mRivalCount) + " RIVALS  "
                 + (room.mWeaponsAllowed ? "WEAPONS ON" : "WEAPONS OFF");
@@ -3047,7 +3149,7 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             if (option == 0)
                 value = modeNames[gHostRaceMode];
             else if (option == 1)
-                value = trackNames[gHostTrackIndex];
+                value = HostTrackName(gHostTrackIndex);
             else if (option == 2)
                 value = std::to_string(gHostLapCount);
             else if (option == 3)
@@ -3072,19 +3174,44 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("HOW TO PLAY", pWidth / 2 - 165, 70, 5);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText("SHIFT OR W ACCEL", pWidth / 2 - 128, 190, 3);
-        DrawPixelText("A D STEER", pWidth / 2 - 72, 270, 3);
-        DrawPixelText("S BRAKE", pWidth / 2 - 60, 310, 3);
-        DrawPixelText("UP JUMP", pWidth / 2 - 60, 350, 3);
-        DrawPixelText("CTRL FIRE", pWidth / 2 - 78, 390, 3);
-        DrawPixelText("X RECOVER TO ROAD", pWidth / 2 - 132, 430, 3);
-        DrawPixelText("FOLLOW THE CYAN FLOW MARKERS", pWidth / 2 - 225, 470, 3);
+        const auto keyName = [](BindAction pAction)
+        {
+            std::string name = SDL_GetScancodeName(static_cast<SDL_Scancode>(gKeyBindings.Key(pAction)));
+            for (char& c : name)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            return name;
+        };
+        const auto padName = [](PadAction pAction)
+        {
+            return std::string(PadBindings::ButtonName(gPadBindings.Button(pAction)));
+        };
+        const std::string lines[] = {
+            keyName(BindAction::Accelerate) + " OR SHIFT  ACCELERATE",
+            keyName(BindAction::SteerLeft) + " " + keyName(BindAction::SteerRight)
+                + " OR ARROWS  STEER",
+            keyName(BindAction::Brake) + " OR DOWN  BRAKE",
+            "UP  JUMP",
+            keyName(BindAction::Fire) + "  FIRE MISSILE",
+            keyName(BindAction::Recover) + "  RECOVER TO ROAD",
+            "PAD  STICK STEER  TRIGGERS DRIVE",
+            "PAD  " + padName(PadAction::Jump) + " JUMP  " + padName(PadAction::Fire) + " FIRE  "
+                + padName(PadAction::Recover) + " RECOVER",
+            "ALT  SHOW OR HIDE YOUR BEST-RUN GHOST",
+            "ESC OR START  PAUSE AND KEY BINDINGS"};
+        int lineTop = 150;
+        for (const std::string& line : lines)
+        {
+            DrawPixelText(line.c_str(), pWidth / 2 - PixelTextWidth(line.c_str(), 2) / 2, lineTop, 2);
+            lineTop += 34;
+        }
+        glColor3f(1.0f, 0.86f, 0.1f);
+        const char* guidance = "FOLLOW THE FLASHING WALL ARROWS";
+        DrawPixelText(guidance, pWidth / 2 - PixelTextWidth(guidance, 3) / 2, lineTop + 20, 3);
         glColor3f(1.0f, 0.78f, 0.12f);
         DrawPixelText("ENTER TO RETURN", pWidth / 2 - 120, pHeight - 70, 3);
     }
     else if (pScreen == FrontScreen::LocalSetup)
     {
-        const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
         const char* labels[] = {"START RACE", "MODE", "TRACK", "LAPS", "RIVALS", "DIFFICULTY",
                                 "CRAFT", "ASSISTS", "WEAPONS", "BACK"};
         glColor3f(0.2f, 0.9f, 1.0f);
@@ -3110,7 +3237,12 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             if (option == 1)
                 DrawPixelText(RaceModeSetupLabel(pRaceMode), pWidth / 2 + 18, top + 19, 2);
             else if (option == 2)
-                DrawPixelText(trackNames[pTrackIndex], pWidth / 2 + 10, top + 16, 3);
+                {
+                const std::string trackLabel = LocalTrackName(pTrackIndex);
+                const bool longName = trackLabel.size() > 14;
+                DrawPixelText(trackLabel.c_str(), pWidth / 2 + 10, top + (longName ? 19 : 16),
+                              longName ? 2 : 3);
+            }
             else if (option == 3)
             {
                 char laps[16];
@@ -3378,36 +3510,38 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     const int resourceLeft = 24;
     const int resourceWidth = 122;
     const int resourceHeight = 9;
+    // Sit below the lap-progress pips of the player and every rival.
+    const int resourceTop = 76 + static_cast<int>(pRivalProgresses.size()) * 18 + 8;
     const int fuelWidth = static_cast<int>(resourceWidth * pPlayerState.mFuel);
     const int missileWidth = static_cast<int>(resourceWidth * pMissile.RechargeFraction());
     glColor3f(0.72f, 0.82f, 0.84f);
-    DrawPixelText("FUEL", resourceLeft, 132, 2);
-    DrawPixelText(pWeaponsAllowed ? "MISSILE" : "WEAPONS OFF", resourceLeft, 154, 2);
+    DrawPixelText("FUEL", resourceLeft, resourceTop, 2);
+    DrawPixelText(pWeaponsAllowed ? "MISSILE" : "WEAPONS OFF", resourceLeft, resourceTop + 22, 2);
     glColor3f(0.02f, 0.05f, 0.08f);
     glBegin(GL_QUADS);
-    glVertex2i(resourceLeft + 62, 134);
-    glVertex2i(resourceLeft + 62 + resourceWidth, 134);
-    glVertex2i(resourceLeft + 62 + resourceWidth, 134 + resourceHeight);
-    glVertex2i(resourceLeft + 62, 134 + resourceHeight);
-    glVertex2i(resourceLeft + 62, 156);
-    glVertex2i(resourceLeft + 62 + resourceWidth, 156);
-    glVertex2i(resourceLeft + 62 + resourceWidth, 156 + resourceHeight);
-    glVertex2i(resourceLeft + 62, 156 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 2);
+    glVertex2i(resourceLeft + 92 + resourceWidth, resourceTop + 2);
+    glVertex2i(resourceLeft + 92 + resourceWidth, resourceTop + 2 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 2 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 24);
+    glVertex2i(resourceLeft + 92 + resourceWidth, resourceTop + 24);
+    glVertex2i(resourceLeft + 92 + resourceWidth, resourceTop + 24 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 24 + resourceHeight);
     glEnd();
     glColor3f(0.18f, 0.78f, 0.54f);
     glBegin(GL_QUADS);
-    glVertex2i(resourceLeft + 62, 134);
-    glVertex2i(resourceLeft + 62 + fuelWidth, 134);
-    glVertex2i(resourceLeft + 62 + fuelWidth, 134 + resourceHeight);
-    glVertex2i(resourceLeft + 62, 134 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 2);
+    glVertex2i(resourceLeft + 92 + fuelWidth, resourceTop + 2);
+    glVertex2i(resourceLeft + 92 + fuelWidth, resourceTop + 2 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 2 + resourceHeight);
     glEnd();
     glColor3f(pMissile.Ready() ? 0.2f : 0.92f, pMissile.Ready() ? 0.82f : 0.52f,
               pMissile.Ready() ? 0.96f : 0.14f);
     glBegin(GL_QUADS);
-    glVertex2i(resourceLeft + 62, 156);
-    glVertex2i(resourceLeft + 62 + (pWeaponsAllowed ? missileWidth : 0), 156);
-    glVertex2i(resourceLeft + 62 + (pWeaponsAllowed ? missileWidth : 0), 156 + resourceHeight);
-    glVertex2i(resourceLeft + 62, 156 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 24);
+    glVertex2i(resourceLeft + 92 + (pWeaponsAllowed ? missileWidth : 0), resourceTop + 24);
+    glVertex2i(resourceLeft + 92 + (pWeaponsAllowed ? missileWidth : 0), resourceTop + 24 + resourceHeight);
+    glVertex2i(resourceLeft + 92, resourceTop + 24 + resourceHeight);
     glEnd();
 
     const int displayedLap = pPlayerProgress.mCompletedLaps + 1 > pTargetLaps
@@ -4016,7 +4150,21 @@ int main(int pArgumentCount, char* pArguments[])
         }
     }
 
-    const std::vector<TrackDefinition>& builtInTracks = BuiltInTracks();
+    gLocalTracks = BuiltInTracks();
+    if (char* trackPrefix = SDL_GetPrefPath("OpenHover", "OpenHover"))
+    {
+        std::vector<std::string> trackMessages;
+        const std::vector<TrackDefinition> customTracks = LoadCustomTracks(
+            std::string(trackPrefix) + "tracks", gLocalTracks, trackMessages);
+        gLocalTracks.insert(gLocalTracks.end(), customTracks.begin(), customTracks.end());
+        for (const std::string& message : trackMessages)
+            std::fprintf(stderr, "OpenHover custom track %s\n", message.c_str());
+        SDL_free(trackPrefix);
+    }
+    gLocalTrackHashes.clear();
+    for (const TrackDefinition& track : gLocalTracks)
+        gLocalTrackHashes.push_back(TrackHash(track));
+    const std::vector<TrackDefinition>& builtInTracks = gLocalTracks;
     int trackIndex = 0;
     TrackDefinition selectedTrack = builtInTracks[trackIndex];
     CraftClass playerCraftClass = CraftClass::Balanced;
@@ -4035,7 +4183,7 @@ int main(int pArgumentCount, char* pArguments[])
     RivalDifficulty rivalDifficulty = RivalDifficulty::Standard;
     int rivalCount = kRivalCount;
     int targetLaps = 3;
-    Championship championship(static_cast<int>(builtInTracks.size()));
+    Championship championship(static_cast<int>(BuiltInTracks().size()));
     Race race(checkpoints, finish, targetLaps);
     std::vector<Race> rivalRaces(kRivalCount, Race(checkpoints, finish, targetLaps));
     LapTimer lapTimer;
@@ -4222,7 +4370,7 @@ int main(int pArgumentCount, char* pArguments[])
                  brakingAssistEnabled ? 1 : 0, static_cast<int>(playerCraftClass),
                  static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
                  static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5));
-        std::fprintf(preferences, "%d\n", static_cast<int>(gCameraMotion));
+        std::fprintf(preferences, "%d %d\n", static_cast<int>(gCameraMotion), gGhostVisible ? 1 : 0);
         std::fclose(preferences);
     };
     char bindingsFile[512] = {};
@@ -4335,6 +4483,9 @@ int main(int pArgumentCount, char* pArguments[])
                 if (optionalSettings >= 5 && std::fscanf(preferences, "%d", &savedCameraMotion) == 1
                     && savedCameraMotion >= 0 && savedCameraMotion <= 2)
                     gCameraMotion = static_cast<CameraMotion>(savedCameraMotion);
+                int savedGhostVisible = 1;
+                if (std::fscanf(preferences, "%d", &savedGhostVisible) == 1)
+                    gGhostVisible = savedGhostVisible != 0;
             }
         }
         if (preferences != nullptr)
@@ -4455,6 +4606,7 @@ int main(int pArgumentCount, char* pArguments[])
         gLobbyJoinedRoomId = 0;
         gLobbyJoinPendingRoomId = 0;
         gLobbyStatus = "DISCONNECTED";
+        gServerTracks.clear();
         gLobbyServerVersion.clear();
         gLobbyServerProtocol = 0;
         gLobbyServerContent = 0;
@@ -4490,7 +4642,22 @@ int main(int pArgumentCount, char* pArguments[])
         lobbyDisplayName += sessionSuffix;
         SDL_StartTextInput();
         gLobbyChatInputFocused = true;
-        gLobbyStatus = lobbyClient.Connect("outiva.com", 9700)
+        // OPENHOVER_SERVER=host:port points the client at another server (a private or test one).
+        std::string serverHost = "outiva.com";
+        int serverPort = 9700;
+        if (const char* override = std::getenv("OPENHOVER_SERVER"))
+        {
+            const std::string text = override;
+            const std::size_t colon = text.rfind(':');
+            if (colon != std::string::npos && colon > 0 && colon + 1 < text.size())
+            {
+                serverHost = text.substr(0, colon);
+                serverPort = std::atoi(text.c_str() + colon + 1);
+            }
+            else if (!text.empty())
+                serverHost = text;
+        }
+        gLobbyStatus = lobbyClient.Connect(serverHost, serverPort)
             ? "CONNECTING" : "SERVER UNAVAILABLE";
     };
     const auto openMultiplayer = [&]()
@@ -4666,6 +4833,7 @@ int main(int pArgumentCount, char* pArguments[])
             gLobbyPlayerId = 0;
             gLobbyJoinedRoomId = 0;
             gLobbyJoinPendingRoomId = 0;
+            gServerTracks.clear();
             gLobbyServerVersion.clear();
             gLobbyServerProtocol = 0;
             gLobbyServerContent = 0;
@@ -4720,7 +4888,31 @@ int main(int pArgumentCount, char* pArguments[])
                 gLobbyStatus = "CONNECTED";
             }
             else if (message.compare(0, 8, "WELCOME ") == 0)
+            {
                 gLobbyPlayerId = std::atoi(message.substr(8).c_str());
+                // Tell the server which custom tracks this player has, by hash, so rooms on them
+                // are only open to players with identical files.
+                int declared = 0;
+                for (std::size_t index = BuiltInTracks().size();
+                     index < gLocalTracks.size() && index < gLocalTrackHashes.size() && declared < 64;
+                     ++index)
+                {
+                    if (IsOnlineSafeTrack(gLocalTracks[index]))
+                    {
+                        lobbyClient.SendCommand("OWN " + gLocalTrackHashes[index]);
+                        ++declared;
+                    }
+                }
+            }
+            else if (message.compare(0, 7, "TRACKS ") == 0)
+                gServerTracks.clear();
+            else if (message.compare(0, 6, "TRACK ") == 0)
+            {
+                const std::vector<std::string> fields = SplitLobbyField(message.substr(6), '|');
+                if (fields.size() == 4 && std::atoi(fields[0].c_str()) == static_cast<int>(gServerTracks.size())
+                    && gServerTracks.size() < 256)
+                    gServerTracks.push_back({fields[1], fields[2], fields[3]});
+            }
             else if (message.compare(0, 10, "REPORTACK ") == 0)
                 gLobbyStatus = "REPORT RECEIVED - THANK YOU";
             else if (message.compare(0, 7, "JOINED ") == 0)
@@ -4791,11 +4983,10 @@ int main(int pArgumentCount, char* pArguments[])
                     gOnlineRaceFinished = false;
                     for (const LobbyRoomView& room : gLobbyRooms)
                     {
-                        if (room.mId == gOnlineRaceRoomId
-                            && room.mTrackIndex >= 0
-                            && room.mTrackIndex < static_cast<int>(builtInTracks.size()))
+                        const int localTrack = LocalIndexForServerTrack(room.mTrackIndex);
+                        if (room.mId == gOnlineRaceRoomId && localTrack >= 0)
                         {
-                            trackIndex = room.mTrackIndex;
+                            trackIndex = localTrack;
                             loadTrack(false);
                             break;
                         }
@@ -4839,9 +5030,9 @@ int main(int pArgumentCount, char* pArguments[])
                             break;
                         }
                     }
-                    if (eventTrack >= 0 && eventTrack < static_cast<int>(builtInTracks.size()))
+                    if (LocalIndexForServerTrack(eventTrack) >= 0)
                     {
-                        trackIndex = eventTrack;
+                        trackIndex = LocalIndexForServerTrack(eventTrack);
                         loadTrack(false);
                         gOnlineRacers.clear();
                         gOnlineMissiles.clear();
@@ -5054,7 +5245,7 @@ int main(int pArgumentCount, char* pArguments[])
                             gHostPrivateRoom = !gHostPrivateRoom;
                         else if (option == 7)
                         {
-                            const std::string command = "CREATE " + builtInTracks[gHostTrackIndex].mName + "|"
+                            const std::string command = "CREATE " + HostTrackName(gHostTrackIndex) + "|"
                                 + std::to_string(gHostRaceMode)
                                 + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
                                 + "|" + std::to_string(gHostPlayerCapacity) + "|"
@@ -5398,7 +5589,7 @@ int main(int pArgumentCount, char* pArguments[])
                         if (gHostSetupSelection == 0)
                             gHostRaceMode = (gHostRaceMode + direction + 4) % 4;
                         else if (gHostSetupSelection == 1)
-                            gHostTrackIndex = (gHostTrackIndex + direction + 3) % 3;
+                            gHostTrackIndex = NextHostTrack(gHostTrackIndex, direction);
                         else if (gHostSetupSelection == 2)
                             gHostLapCount = direction > 0 ? (gHostLapCount == 5 ? 1 : gHostLapCount + 1)
                                                                : (gHostLapCount == 1 ? 5 : gHostLapCount - 1);
@@ -5687,6 +5878,13 @@ int main(int pArgumentCount, char* pArguments[])
             }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r && winner != 0)
                 advanceResult();
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0
+                && (event.key.keysym.sym == SDLK_LALT || event.key.keysym.sym == SDLK_RALT)
+                && frontScreen == FrontScreen::RaceSetup)
+            {
+                gGhostVisible = !gGhostVisible;
+                savePreferences();
+            }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v)
             {
                 steeringAssistEnabled = !steeringAssistEnabled;
@@ -5834,8 +6032,15 @@ int main(int pArgumentCount, char* pArguments[])
                     for (int rivalIndex = 0; rivalIndex < rivalCount; ++rivalIndex)
                     {
                         rivalControllers[rivalIndex].Update(rivals[rivalIndex].State());
+                        std::vector<HovercraftState> others;
+                        others.push_back(hovercraft.State());
+                        for (int otherIndex = 0; otherIndex < rivalCount; ++otherIndex)
+                        {
+                            if (otherIndex != rivalIndex)
+                                others.push_back(rivals[otherIndex].State());
+                        }
                         HovercraftInput rivalInput = rivalControllers[rivalIndex].InputFor(
-                            rivals[rivalIndex].State());
+                            rivals[rivalIndex].State(), others);
                         rivalInput.mJump = ShouldJumpRaisedSection(rivals[rivalIndex].State(),
                                                                    raisedSections);
                         rivals[rivalIndex].Step(rivalInput, seconds);
@@ -6243,7 +6448,7 @@ int main(int pArgumentCount, char* pArguments[])
             for (int rivalIndex = 0; rivalIndex < static_cast<int>(rivalStates.size()); ++rivalIndex)
                 DrawHovercraft(rivalStates[rivalIndex], true, false, CraftClass::Balanced, rivalIndex + 2);
         }
-        if (ghostActive)
+        if (ghostActive && gGhostVisible)
             DrawHovercraft(replayGhost.State(), false, true, playerCraftClass, 1);
         DrawHovercraft(state, false, false, playerCraftClass, 1);
         std::vector<RaceProgress> rivalProgresses(raceProgresses.begin() + 1, raceProgresses.end());

@@ -34,6 +34,10 @@ public:
     void Reset();
     void Update(const HovercraftState& pState);
     HovercraftInput InputFor(const HovercraftState& pState) const;
+    // Same, but steers around any craft in pOthers that is close ahead, so rivals pass each other
+    // and the player instead of driving through them.
+    HovercraftInput InputFor(const HovercraftState& pState,
+                             const std::vector<HovercraftState>& pOthers) const;
     int TargetIndex() const { return mTargetIndex; }
 
 private:
