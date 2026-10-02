@@ -2664,8 +2664,10 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
 }
 }
 
-int main()
+int main(int pArgumentCount, char* pArguments[])
 {
+    (void)pArgumentCount;
+    (void)pArguments;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0)
     {
         std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
