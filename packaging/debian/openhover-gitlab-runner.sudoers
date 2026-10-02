@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+gitlab-runner ALL=(root) NOPASSWD: /usr/local/sbin/openhover-deploy
