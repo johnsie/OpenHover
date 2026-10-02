@@ -88,6 +88,9 @@ std::vector<LobbyRoomView> gLobbyRooms;
 std::vector<std::string> gLobbyChatMessages;
 std::string gLobbyChatInput;
 bool gLobbyChatInputFocused = false;
+std::vector<std::string> gOnlineChatMessages;
+std::string gOnlineChatInput;
+bool gOnlineChatInputFocused = false;
 std::string gPlayerDisplayName;
 std::string gLobbyStatus = "CONNECTING TO SERVER";
 int gLobbySelectedRoom = -1;
@@ -2835,6 +2838,49 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     glEnable(GL_FOG);
     glEnable(GL_LIGHTING);
 }
+
+void DrawOnlineChat(int pWidth, int pHeight)
+{
+    if (gOnlineChatMessages.empty() && !gOnlineChatInputFocused)
+        return;
+    const int chatWidth = std::min(400, pWidth - 48);
+    const int chatHeight = gOnlineChatInputFocused ? 126 : 98;
+    const int chatLeft = (pWidth - chatWidth) / 2;
+    const int chatTop = pHeight - chatHeight - 18;
+    DrawOnlineHudPanel(chatLeft, chatTop, chatWidth, chatHeight);
+    const int firstMessage = std::max(0, static_cast<int>(gOnlineChatMessages.size()) - 4);
+    glColor3f(0.82f, 0.9f, 0.92f);
+    for (int messageIndex = firstMessage; messageIndex < static_cast<int>(gOnlineChatMessages.size()); ++messageIndex)
+        DrawPixelText(gOnlineChatMessages[messageIndex].c_str(), chatLeft + 12,
+                      chatTop + 12 + (messageIndex - firstMessage) * 18, 2);
+    if (!gOnlineChatInputFocused)
+        return;
+
+    const int inputTop = chatTop + chatHeight - 30;
+    const int maximumVisibleCharacters = std::max(1, (chatWidth - 32) / 12);
+    const std::string visibleInput = gOnlineChatInput.size()
+        > static_cast<std::size_t>(maximumVisibleCharacters)
+        ? gOnlineChatInput.substr(gOnlineChatInput.size() - maximumVisibleCharacters) : gOnlineChatInput;
+    glColor3f(0.2f, 0.9f, 1.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2i(chatLeft + 8, inputTop - 4);
+    glVertex2i(chatLeft + chatWidth - 8, inputTop - 4);
+    glVertex2i(chatLeft + chatWidth - 8, inputTop + 20);
+    glVertex2i(chatLeft + 8, inputTop + 20);
+    glEnd();
+    glColor3f(0.9f, 0.96f, 0.98f);
+    DrawPixelText(visibleInput.c_str(), chatLeft + 14, inputTop + 2, 2);
+    if ((SDL_GetTicks() / 500) % 2 == 0)
+    {
+        const int caretX = chatLeft + 14 + PixelTextWidth(visibleInput, 2);
+        glBegin(GL_QUADS);
+        glVertex2i(caretX, inputTop);
+        glVertex2i(caretX + 2, inputTop);
+        glVertex2i(caretX + 2, inputTop + 17);
+        glVertex2i(caretX, inputTop + 17);
+        glEnd();
+    }
+}
 }
 
 int main(int pArgumentCount, char* pArguments[])
@@ -3186,6 +3232,9 @@ int main(int pArgumentCount, char* pArguments[])
         gLobbyChatMessages.clear();
         gLobbyChatInput.clear();
         gLobbyChatInputFocused = false;
+        gOnlineChatMessages.clear();
+        gOnlineChatInput.clear();
+        gOnlineChatInputFocused = false;
         gLobbySelectedRoom = -1;
         gLobbyPlayerId = 0;
         gLobbyJoinedRoomId = 0;
@@ -3262,9 +3311,11 @@ int main(int pArgumentCount, char* pArguments[])
                         break;
                     }
                 }
-                gLobbyChatMessages.push_back(senderName + " " + text);
-                if (gLobbyChatMessages.size() > 32)
-                    gLobbyChatMessages.erase(gLobbyChatMessages.begin());
+                std::vector<std::string>& chatMessages = frontScreen == FrontScreen::OnlineRace
+                    ? gOnlineChatMessages : gLobbyChatMessages;
+                chatMessages.push_back(senderName + " " + text);
+                if (chatMessages.size() > 32)
+                    chatMessages.erase(chatMessages.begin());
             }
             else if (message.compare(0, 5, "ROOM ") == 0 && gHostCreatePending)
             {
@@ -3287,6 +3338,9 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                 }
                 SDL_StopTextInput();
+                gOnlineChatMessages.clear();
+                gOnlineChatInput.clear();
+                gOnlineChatInputFocused = false;
                 frontScreen = FrontScreen::OnlineRace;
                 gLobbyStatus = "RACING";
             }
@@ -3299,6 +3353,8 @@ int main(int pArgumentCount, char* pArguments[])
                 gOnlineRaceTick = 0;
                 gOnlineTargetLaps = 0;
                 gOnlineRacers.clear();
+                gOnlineChatInput.clear();
+                gOnlineChatInputFocused = false;
                 SDL_StartTextInput();
                 gLobbyChatInputFocused = true;
                 frontScreen = FrontScreen::Multiplayer;
@@ -3570,6 +3626,13 @@ int main(int pArgumentCount, char* pArguments[])
                     gLobbyChatInput += event.text.text;
                 continue;
             }
+            if (frontScreen == FrontScreen::OnlineRace && gOnlineChatInputFocused
+                && event.type == SDL_TEXTINPUT)
+            {
+                if (gOnlineChatInput.size() + std::strlen(event.text.text) <= 120)
+                    gOnlineChatInput += event.text.text;
+                continue;
+            }
             if (frontScreen == FrontScreen::DisplayNameSetup && event.type == SDL_TEXTINPUT)
             {
                 AppendLobbyNameText(gPlayerDisplayName, event.text.text);
@@ -3579,6 +3642,11 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
                 {
+                    if (frontScreen == FrontScreen::OnlineRace && gOnlineChatInputFocused)
+                    {
+                        gOnlineChatInputFocused = false;
+                        continue;
+                    }
                     if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::OnlineRace || frontScreen == FrontScreen::DisplayNameSetup || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
                         || frontScreen == FrontScreen::LocalSetup)
                     {
@@ -3591,6 +3659,9 @@ int main(int pArgumentCount, char* pArguments[])
                             gOnlineRaceTick = 0;
                             gOnlineTargetLaps = 0;
                             gOnlineRacers.clear();
+                            gOnlineChatMessages.clear();
+                            gOnlineChatInput.clear();
+                            gOnlineChatInputFocused = false;
                             SDL_StartTextInput();
                             frontScreen = FrontScreen::Multiplayer;
                         }
@@ -3620,6 +3691,24 @@ int main(int pArgumentCount, char* pArguments[])
                             % static_cast<int>(gLobbyRooms.size());
                     else if (event.key.keysym.sym == SDLK_DOWN && !gLobbyRooms.empty())
                         gLobbySelectedRoom = (gLobbySelectedRoom + 1) % static_cast<int>(gLobbyRooms.size());
+                }
+                else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::OnlineRace)
+                {
+                    if (gOnlineChatInputFocused && event.key.keysym.sym == SDLK_BACKSPACE
+                        && !gOnlineChatInput.empty())
+                        gOnlineChatInput.erase(gOnlineChatInput.size() - 1);
+                    else if (gOnlineChatInputFocused
+                             && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
+                    {
+                        if (!gOnlineChatInput.empty() && lobbyClient.SendCommand("CHAT " + gOnlineChatInput))
+                            gOnlineChatInput.clear();
+                        gOnlineChatInputFocused = false;
+                    }
+                    else if (!gOnlineChatInputFocused && event.key.keysym.sym == SDLK_t)
+                    {
+                        gOnlineChatInputFocused = true;
+                        SDL_StartTextInput();
+                    }
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::DisplayNameSetup)
                 {
@@ -4183,6 +4272,7 @@ int main(int pArgumentCount, char* pArguments[])
             if (localRacer != nullptr)
                 DrawOnlineHud(*localRacer, static_cast<int>(gOnlineRacers.size()), gOnlineTargetLaps,
                               drawableWidth, drawableHeight);
+            DrawOnlineChat(drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;
         }

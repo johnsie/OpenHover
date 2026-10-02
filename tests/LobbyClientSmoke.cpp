@@ -146,12 +146,19 @@ int main(int pArgumentCount, char* pArguments[])
     const bool raceStarted = guestJoined && host.SendCommand("START 1")
         && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
     const bool raceHudReceived = raceStarted && TickUntilPrefix(host, "RACEHUD 1|3|");
+    spectator.Tick();
+    spectator.TakeMessages();
+    const bool raceChatReceived = raceHudReceived && host.SendCommand("CHAT Race message")
+        && TickUntil(host, "CHAT 1 Race message") && TickUntil(guest, "CHAT 1 Race message");
     bool spectatorReceivedRace = false;
-    for (int attempt = 0; attempt < 20 && raceHudReceived; ++attempt)
+    bool spectatorReceivedRaceChat = false;
+    for (int attempt = 0; attempt < 20 && raceChatReceived; ++attempt)
     {
         spectator.Tick();
-        spectatorReceivedRace = spectatorReceivedRace
-            || ContainsPrefix(spectator.TakeMessages(), "RACE 1|");
+        const std::vector<std::string> spectatorMessages = spectator.TakeMessages();
+        spectatorReceivedRace = spectatorReceivedRace || ContainsPrefix(spectatorMessages, "RACE 1|");
+        spectatorReceivedRaceChat = spectatorReceivedRaceChat
+            || Contains(spectatorMessages, "CHAT 1 Race message");
         usleep(10000);
     }
     spectator.Disconnect();
@@ -161,7 +168,8 @@ int main(int pArgumentCount, char* pArguments[])
     kill(serverProcess, SIGTERM);
     int serverStatus = 0;
     waitpid(serverProcess, &serverStatus, 0);
-    if (!raceHudReceived || spectatorReceivedRace || !spectatorDepartureAnnounced)
+    if (!raceChatReceived || spectatorReceivedRace || spectatorReceivedRaceChat
+        || !spectatorDepartureAnnounced)
     {
         std::cerr << "tcp lobby server did not isolate authoritative race snapshots\n";
         return 1;

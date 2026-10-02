@@ -221,8 +221,21 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
     }
     if (command == "CHAT" && !ContainsProtocolDelimiter(argument) && pLobby.SendChat(pClient.mPlayerId, argument))
     {
+        const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
+        bool raceChat = false;
+        for (const LobbyRoom& room : pLobby.Rooms())
+        {
+            if (room.mId == roomId)
+            {
+                raceChat = room.mRaceRunning;
+                break;
+            }
+        }
         for (const ClientConnection& client : pClients)
-            SendLine(client, "CHAT " + std::to_string(pClient.mPlayerId) + " " + argument);
+        {
+            if (!raceChat || pLobby.RoomForPlayer(client.mPlayerId) == roomId)
+                SendLine(client, "CHAT " + std::to_string(pClient.mPlayerId) + " " + argument);
+        }
         return;
     }
     if (command == "CREATE")
