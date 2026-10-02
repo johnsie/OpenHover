@@ -1,0 +1,62 @@
+name: Build Installers
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-deb:
+    name: Linux DEB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libgl1-mesa-dev libsdl2-dev
+      - name: Configure
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then version="${GITHUB_REF_NAME#v}"; else version="0.0.0"; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOPENHOVER_PACKAGE_VERSION="${version}"
+      - name: Build and test
+        run: cmake --build build --parallel && ctest --test-dir build --output-on-failure
+      - name: Package DEB
+        run: cpack --config build/CPackConfig.cmake --generator DEB
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhover-linux-deb
+          path: build/packages/*.deb
+          if-no-files-found: error
+
+  windows-installer:
+    name: Windows x64 Installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --yes --no-progress
+      - name: Install SDL2
+        shell: pwsh
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sdl2:x64-windows-static'
+      - name: Configure
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.Substring(1) } else { "0.0.0" }
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOPENHOVER_PACKAGE_VERSION=$version -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Package installer
+        shell: pwsh
+        run: cpack --config build/CPackConfig.cmake --generator NSIS -C Release
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhover-windows-x64-installer
+          path: build/packages/*.exe
+          if-no-files-found: error
