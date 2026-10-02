@@ -54,7 +54,7 @@ member as host. If the room becomes empty, the server removes it.
 ## Networking Model
 
 The initial implementation uses one reliable, encrypted TCP connection from each
-client to the server. Clients make an outbound connection to `192.168.10.181:9700`,
+client to the server. Clients make an outbound connection to `outiva.com:9700`,
 so they work across separate NATs without accepting inbound connections or using
 UDP. The connection carries login, lobby/room changes, chat, ready states, race
 settings, input commands, state snapshots, and results.

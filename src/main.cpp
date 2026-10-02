@@ -2901,7 +2901,7 @@ int main()
     {
         leaveLobby();
         SDL_StartTextInput();
-        gLobbyStatus = lobbyClient.Connect("192.168.10.181", 9700)
+        gLobbyStatus = lobbyClient.Connect("outiva.com", 9700)
             ? "CONNECTING" : "SERVER UNAVAILABLE";
     };
     const auto updateLobby = [&]()
