@@ -17,6 +17,16 @@ bool Contains(const std::vector<std::string>& pMessages, const std::string& pExp
     return std::find(pMessages.begin(), pMessages.end(), pExpected) != pMessages.end();
 }
 
+bool ContainsPrefix(const std::vector<std::string>& pMessages, const std::string& pPrefix)
+{
+    for (const std::string& message : pMessages)
+    {
+        if (message.compare(0, pPrefix.size(), pPrefix) == 0)
+            return true;
+    }
+    return false;
+}
+
 bool TickUntil(TcpLobbyClient& pClient, const std::string& pExpected)
 {
     for (int attempt = 0; attempt < 200; ++attempt)
@@ -33,6 +43,38 @@ bool TickUntil(TcpLobbyClient& pClient, const std::string& pExpected)
         usleep(10000);
     }
     std::cerr << "client timed out waiting for " << pExpected << '\n';
+    return false;
+}
+
+bool TickUntilPrefix(TcpLobbyClient& pClient, const std::string& pExpectedPrefix)
+{
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        pClient.Tick();
+        if (ContainsPrefix(pClient.TakeMessages(), pExpectedPrefix))
+            return true;
+        if (pClient.State() == TcpLobbyClientState::Failed)
+        {
+            std::cerr << "client failed while waiting for " << pExpectedPrefix << '\n';
+            return false;
+        }
+        usleep(10000);
+    }
+    std::cerr << "client timed out waiting for " << pExpectedPrefix << '\n';
+    return false;
+}
+
+bool ConnectAndHello(TcpLobbyClient& pClient, int pPort, const std::string& pName, int pExpectedId)
+{
+    for (int attempt = 0; attempt < 100; ++attempt)
+    {
+        if (pClient.Connect("127.0.0.1", pPort) && TickUntil(pClient, "OPENHOVER 1")
+            && pClient.SendCommand("HELLO " + pName)
+            && TickUntil(pClient, "WELCOME " + std::to_string(pExpectedId)))
+            return true;
+        pClient.Disconnect();
+        usleep(10000);
+    }
     return false;
 }
 }
@@ -57,29 +99,41 @@ int main(int pArgumentCount, char* pArguments[])
         return 1;
     }
 
-    TcpLobbyClient client;
-    bool connected = false;
-    bool greeted = false;
-    for (int attempt = 0; attempt < 100 && !greeted; ++attempt)
+    TcpLobbyClient host;
+    TcpLobbyClient guest;
+    TcpLobbyClient spectator;
+    const bool hostConnected = ConnectAndHello(host, port, "Host", 1);
+    const bool guestConnected = hostConnected && ConnectAndHello(guest, port, "Guest", 2);
+    const bool spectatorConnected = guestConnected && ConnectAndHello(spectator, port, "Spectator", 3);
+    const bool roomCreated = spectatorConnected
+        && host.SendCommand("CREATE Smoke race|0|0|3|2|0|1")
+        && TickUntil(host, "ROOM 1");
+    if (roomCreated)
     {
-        connected = client.Connect("127.0.0.1", port);
-        if (connected)
-            greeted = TickUntil(client, "OPENHOVER 1");
-        if (!greeted)
-        {
-            client.Disconnect();
-            usleep(10000);
-        }
+        guest.Tick();
+        guest.TakeMessages();
     }
-    const bool queuedHello = greeted && client.SendCommand("HELLO SmokeClient");
-    const bool welcomed = queuedHello && TickUntil(client, "WELCOME 1");
-    client.Disconnect();
+    const bool guestJoined = roomCreated && guest.SendCommand("JOIN 1")
+        && TickUntilPrefix(guest, "LOBBY|");
+    const bool raceStarted = guestJoined && host.SendCommand("START 1")
+        && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
+    bool spectatorReceivedRace = false;
+    for (int attempt = 0; attempt < 20 && raceStarted; ++attempt)
+    {
+        spectator.Tick();
+        spectatorReceivedRace = spectatorReceivedRace
+            || ContainsPrefix(spectator.TakeMessages(), "RACE 1|");
+        usleep(10000);
+    }
+    host.Disconnect();
+    guest.Disconnect();
+    spectator.Disconnect();
     kill(serverProcess, SIGTERM);
     int serverStatus = 0;
     waitpid(serverProcess, &serverStatus, 0);
-    if (!welcomed)
+    if (!raceStarted || spectatorReceivedRace)
     {
-        std::cerr << "tcp lobby client did not complete server handshake\n";
+        std::cerr << "tcp lobby server did not isolate authoritative race snapshots\n";
         return 1;
     }
     return 0;

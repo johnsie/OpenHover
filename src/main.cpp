@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,7 @@ enum class FrontScreen
     Welcome,
     Multiplayer,
     HostRaceSetup,
+    OnlineRace,
     HowToPlay,
     Settings,
     LocalSetup,
@@ -65,6 +67,12 @@ struct LobbyRoomView
     bool mWeaponsAllowed = false;
 };
 
+struct OnlineRacerView
+{
+    int mPlayerId = 0;
+    HovercraftState mState;
+};
+
 std::vector<std::string> gLobbyPlayers;
 std::vector<LobbyRoomView> gLobbyRooms;
 std::vector<std::string> gLobbyChatMessages;
@@ -80,6 +88,9 @@ int gHostPlayerCapacity = 8;
 int gHostRivalCount = 0;
 bool gHostWeaponsAllowed = true;
 bool gHostCreatePending = false;
+int gOnlineRaceRoomId = 0;
+unsigned int gOnlineRaceTick = 0;
+std::vector<OnlineRacerView> gOnlineRacers;
 
 std::vector<std::string> SplitLobbyField(const std::string& pText, char pDelimiter)
 {
@@ -127,6 +138,42 @@ void ParseLobbySnapshot(const std::string& pMessage)
         gLobbySelectedRoom = -1;
     else if (gLobbySelectedRoom < 0 || gLobbySelectedRoom >= static_cast<int>(gLobbyRooms.size()))
         gLobbySelectedRoom = 0;
+}
+
+bool ParseRaceSnapshot(const std::string& pMessage)
+{
+    const std::vector<std::string> entries = SplitLobbyField(pMessage, '|');
+    if (entries.size() < 3 || entries[0].compare(0, 5, "RACE ") != 0)
+        return false;
+    const int roomId = std::atoi(entries[0].substr(5).c_str());
+    const int tick = std::atoi(entries[1].c_str());
+    if (roomId <= 0 || tick < 0)
+        return false;
+    std::vector<OnlineRacerView> racers;
+    for (std::size_t index = 2; index < entries.size(); ++index)
+    {
+        const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
+        if (fields.size() != 6)
+            return false;
+        OnlineRacerView racer;
+        racer.mPlayerId = std::atoi(fields[0].c_str());
+        racer.mState.mX = std::strtod(fields[1].c_str(), nullptr);
+        racer.mState.mY = std::strtod(fields[2].c_str(), nullptr);
+        racer.mState.mHeading = std::strtod(fields[3].c_str(), nullptr);
+        racer.mState.mTravelHeading = racer.mState.mHeading;
+        racer.mState.mSpeed = std::strtod(fields[4].c_str(), nullptr);
+        racer.mState.mHeight = std::strtod(fields[5].c_str(), nullptr);
+        racer.mState.mPreviousX = racer.mState.mX;
+        racer.mState.mPreviousY = racer.mState.mY;
+        racer.mState.mHasPreviousPosition = true;
+        if (racer.mPlayerId <= 0)
+            return false;
+        racers.push_back(racer);
+    }
+    gOnlineRaceRoomId = roomId;
+    gOnlineRaceTick = static_cast<unsigned int>(tick);
+    gOnlineRacers.swap(racers);
+    return true;
 }
 
 const char* RaceModeSetupLabel(RaceMode pRaceMode)
@@ -2699,6 +2746,7 @@ int main()
     bool weaponsAllowed = true;
     TcpLobbyClient lobbyClient;
     bool lobbyHelloSent = false;
+    double onlineInputSeconds = 0.0;
     std::string lobbyDisplayName = "PILOT";
     const char* systemUserName = SDL_getenv("USER");
     if (systemUserName != nullptr && systemUserName[0] != '\0')
@@ -2896,6 +2944,9 @@ int main()
         gLobbySelectedRoom = -1;
         gLobbyPlayerId = 0;
         gLobbyStatus = "DISCONNECTED";
+        gOnlineRaceRoomId = 0;
+        gOnlineRaceTick = 0;
+        gOnlineRacers.clear();
     };
     const auto connectLobby = [&]()
     {
@@ -2906,7 +2957,8 @@ int main()
     };
     const auto updateLobby = [&]()
     {
-        if (frontScreen != FrontScreen::Multiplayer && frontScreen != FrontScreen::HostRaceSetup)
+        if (frontScreen != FrontScreen::Multiplayer && frontScreen != FrontScreen::HostRaceSetup
+            && frontScreen != FrontScreen::OnlineRace)
             return;
         lobbyClient.Tick();
         if (lobbyClient.State() == TcpLobbyClientState::Connecting)
@@ -2940,6 +2992,23 @@ int main()
                 gHostCreatePending = false;
                 gLobbyStatus = "ROOM CREATED";
                 frontScreen = FrontScreen::Multiplayer;
+            }
+            else if (message.compare(0, 5, "RACE ") == 0 && ParseRaceSnapshot(message))
+            {
+                for (const LobbyRoomView& room : gLobbyRooms)
+                {
+                    if (room.mId == gOnlineRaceRoomId
+                        && room.mTrackIndex >= 0
+                        && room.mTrackIndex < static_cast<int>(builtInTracks.size()))
+                    {
+                        trackIndex = room.mTrackIndex;
+                        loadTrack(false);
+                        break;
+                    }
+                }
+                SDL_StopTextInput();
+                frontScreen = FrontScreen::OnlineRace;
+                gLobbyStatus = "RACING";
             }
             else if (message.compare(0, 6, "ERROR ") == 0)
             {
@@ -3144,12 +3213,22 @@ int main()
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
                 {
-                    if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
+                    if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup || frontScreen == FrontScreen::OnlineRace || frontScreen == FrontScreen::HowToPlay || frontScreen == FrontScreen::Settings
                         || frontScreen == FrontScreen::LocalSetup)
                     {
                         if (frontScreen == FrontScreen::Multiplayer || frontScreen == FrontScreen::HostRaceSetup)
                             leaveLobby();
-                        frontScreen = FrontScreen::Welcome;
+                        if (frontScreen == FrontScreen::OnlineRace)
+                        {
+                            lobbyClient.SendCommand("LEAVE");
+                            gOnlineRaceRoomId = 0;
+                            gOnlineRaceTick = 0;
+                            gOnlineRacers.clear();
+                            SDL_StartTextInput();
+                            frontScreen = FrontScreen::Multiplayer;
+                        }
+                        else
+                            frontScreen = FrontScreen::Welcome;
                     }
                     else
                         running = false;
@@ -3377,7 +3456,20 @@ int main()
             input.mJump = input.mJump || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B);
             input.mFire = input.mFire || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X);
         }
-        const int simulationSteps = pauseMenuOpen ? 0 : simulationClock.Consume(frameSeconds);
+        if (frontScreen == FrontScreen::OnlineRace)
+        {
+            onlineInputSeconds += std::fmin(frameSeconds, 0.1);
+            if (onlineInputSeconds >= 1.0 / 30.0)
+            {
+                std::ostringstream command;
+                command << "INPUT " << input.mThrottle << '|' << input.mSteering << '|'
+                        << (input.mJump ? 1 : 0) << '|' << (input.mReverseFacing ? 1 : 0);
+                lobbyClient.SendCommand(command.str());
+                onlineInputSeconds = 0.0;
+            }
+        }
+        const int simulationSteps = frontScreen == FrontScreen::RaceSetup && !pauseMenuOpen
+            ? simulationClock.Consume(frameSeconds) : 0;
         for (int step = 0; step < simulationSteps; ++step)
         {
             const double seconds = simulationClock.StepSeconds();
@@ -3568,7 +3660,9 @@ int main()
             std::snprintf(championshipOverlayPoints, sizeof(championshipOverlayPoints), "YOU %d",
                           championship.PlayerPoints());
         }
-        if (frontScreen != FrontScreen::RaceSetup)
+        if (frontScreen == FrontScreen::OnlineRace)
+            std::snprintf(title, sizeof(title), "OpenHover | Online Race | Server tick %u", gOnlineRaceTick);
+        else if (frontScreen != FrontScreen::RaceSetup)
             std::snprintf(title, sizeof(title), "OpenHover | Welcome");
         else if (raceStart.Ready())
         {
@@ -3633,7 +3727,7 @@ int main()
         int drawableHeight = 0;
         SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
         glViewport(0, 0, drawableWidth, drawableHeight);
-        if (frontScreen != FrontScreen::RaceSetup)
+        if (frontScreen != FrontScreen::RaceSetup && frontScreen != FrontScreen::OnlineRace)
         {
             DrawFrontScreen(frontScreen,
                             frontScreen == FrontScreen::LocalSetup ? localSetupSelection
@@ -3642,6 +3736,49 @@ int main()
                             cameraDistanceSetting, audioFeedback.Enabled(), trackIndex, targetLaps, rivalCount,
                             rivalDifficulty, raceMode, weaponsAllowed,
                             drawableWidth, drawableHeight);
+            SDL_GL_SwapWindow(window);
+            continue;
+        }
+        if (frontScreen == FrontScreen::OnlineRace)
+        {
+            HovercraftState cameraState;
+            for (const OnlineRacerView& racer : gOnlineRacers)
+            {
+                if (racer.mPlayerId == gLobbyPlayerId)
+                {
+                    cameraState = racer.mState;
+                    break;
+                }
+            }
+            const GLfloat atmosphere[] = {selectedTrack.mAtmosphereRed, selectedTrack.mAtmosphereGreen,
+                              selectedTrack.mAtmosphereBlue, 1.0f};
+            glFogfv(GL_FOG_COLOR, atmosphere);
+            glClearColor(selectedTrack.mAtmosphereRed, selectedTrack.mAtmosphereGreen,
+                         selectedTrack.mAtmosphereBlue, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glMatrixMode(GL_PROJECTION);
+            glLoadIdentity();
+            SetPerspective(static_cast<double>(drawableWidth) / drawableHeight, cameraState.mSpeed);
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+            const double cameraDistances[] = {4.6, 5.8, 7.4};
+            SetChaseCamera(cameraState, cameraDistances[cameraDistanceSetting]);
+            const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
+            glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
+            DrawCourseGrid(cameraState);
+            DrawTrackEnvironment(selectedTrack);
+            DrawConnectedTrack(courseWaypoints, selectedTrack.mRoadHalfWidth,
+                       selectedTrack.mRoadRed, selectedTrack.mRoadGreen, selectedTrack.mRoadBlue,
+                       selectedTrack.mWallRed, selectedTrack.mWallGreen, selectedTrack.mWallBlue, roadTexture,
+                       wallTexture);
+            DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
+            DrawCheckpointGates(courseWaypoints, checkpoints, 0, selectedTrack.mRoadHalfWidth);
+            for (std::size_t racerIndex = 0; racerIndex < gOnlineRacers.size(); ++racerIndex)
+            {
+                const OnlineRacerView& racer = gOnlineRacers[racerIndex];
+                DrawHovercraft(racer.mState, racer.mPlayerId != gLobbyPlayerId, false,
+                               CraftClass::Balanced, static_cast<int>(racerIndex) + 1);
+            }
             SDL_GL_SwapWindow(window);
             continue;
         }

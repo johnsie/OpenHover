@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -101,7 +102,7 @@ void BroadcastLobbySnapshot(const Lobby& pLobby, const std::vector<ClientConnect
 }
 
 void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
-                           const std::vector<ClientConnection>& pClients)
+                           const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
 {
     const RaceSnapshot snapshot = pRace.Snapshot();
     std::ostringstream message;
@@ -113,13 +114,28 @@ void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
                 << racer.mState.mHeight;
     }
     for (const ClientConnection& client : pClients)
-        SendLine(client, message.str());
+    {
+        if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
+            SendLine(client, message.str());
+    }
 }
 
-void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, Lobby& pLobby)
+void StopRace(Lobby& pLobby, std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
+              LobbyRoomId pRoomId)
+{
+    if (pRaces.erase(pRoomId) != 0)
+        pLobby.FinishRace(pRoomId);
+}
+
+void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, Lobby& pLobby,
+                  std::map<LobbyRoomId, AuthoritativeRace>& pRaces)
 {
     if (pClients[pIndex].mPlayerId != 0)
+    {
+        const LobbyRoomId roomId = pLobby.RoomForPlayer(pClients[pIndex].mPlayerId);
         pLobby.Disconnect(pClients[pIndex].mPlayerId);
+        StopRace(pLobby, pRaces, roomId);
+    }
     close(pClients[pIndex].mSocket);
     pClients.erase(pClients.begin() + pIndex);
 }
@@ -168,14 +184,23 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             return;
         }
     }
-    else if (command == "JOIN" || command == "LEAVE")
+    else if (command == "JOIN")
     {
         int roomId = 0;
-        const bool success = command == "LEAVE" ? argument.empty() && pLobby.LeaveRoom(pClient.mPlayerId)
-            : ParseInteger(argument, roomId) && (command == "JOIN"
-                ? pLobby.JoinRoom(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId)) : false);
+        const bool success = ParseInteger(argument, roomId)
+            && pLobby.JoinRoom(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId));
         if (success)
         {
+            BroadcastLobbySnapshot(pLobby, pClients);
+            return;
+        }
+    }
+    else if (command == "LEAVE")
+    {
+        const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
+        if (argument.empty() && pLobby.LeaveRoom(pClient.mPlayerId))
+        {
+            StopRace(pLobby, pRaces, roomId);
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
         }
@@ -183,22 +208,26 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
     else if (command == "START")
     {
         int roomId = 0;
-        if (ParseInteger(argument, roomId) && pLobby.StartRace(pClient.mPlayerId, static_cast<LobbyRoomId>(roomId)))
+        if (ParseInteger(argument, roomId))
         {
+            const LobbyRoom* requestedRoom = nullptr;
             for (const LobbyRoom& room : pLobby.Rooms())
             {
                 if (room.mId == static_cast<LobbyRoomId>(roomId))
                 {
-                    AuthoritativeRace race;
-                    if (race.Start(room.mPlayerIds, room.mSettings.mTrackIndex))
-                        pRaces[room.mId] = race;
-                    else
-                        SendLine(pClient, "ERROR could not start race");
+                    requestedRoom = &room;
                     break;
                 }
             }
-            BroadcastLobbySnapshot(pLobby, pClients);
-            return;
+            AuthoritativeRace race;
+            if (requestedRoom != nullptr
+                && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex)
+                && pLobby.StartRace(pClient.mPlayerId, requestedRoom->mId))
+            {
+                pRaces[requestedRoom->mId] = race;
+                BroadcastLobbySnapshot(pLobby, pClients);
+                return;
+            }
         }
     }
     else if (command == "INPUT")
@@ -218,6 +247,8 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             && ParseDouble(fields[0], throttle) && ParseDouble(fields[1], steering)
             && ParseInteger(fields[2], jump) && ParseInteger(fields[3], reverseFacing)
             && (jump == 0 || jump == 1) && (reverseFacing == 0 || reverseFacing == 1)
+            && std::isfinite(throttle) && std::isfinite(steering)
+            && std::fabs(throttle) <= 1.0 && std::fabs(steering) <= 1.0
             && race->second.SubmitInput({pClient.mPlayerId, throttle, steering,
                                          jump != 0, reverseFacing != 0}))
             return;
@@ -319,14 +350,14 @@ int main(int pArgumentCount, char* pArguments[])
             const ssize_t received = recv(client.mSocket, buffer, sizeof(buffer), 0);
             if (received <= 0)
             {
-                RemoveClient(clients, index, lobby);
+                RemoveClient(clients, index, lobby, races);
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }
             client.mReceiveBuffer.append(buffer, static_cast<std::size_t>(received));
             if (client.mReceiveBuffer.size() > kMaximumReceiveBuffer)
             {
-                RemoveClient(clients, index, lobby);
+                RemoveClient(clients, index, lobby, races);
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }
@@ -345,7 +376,7 @@ int main(int pArgumentCount, char* pArguments[])
         {
             race->second.Step();
             if (race->second.Snapshot().mTick % 4 == 0)
-                BroadcastRaceSnapshot(race->first, race->second, clients);
+                BroadcastRaceSnapshot(race->first, race->second, lobby, clients);
         }
     }
     for (const ClientConnection& client : clients)
