@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+#include "Course.h"
+
+#include <limits>
+
+Course::Course(const std::vector<RaceGate>& pWaypoints, double pHalfWidth)
+    : mWaypoints(pWaypoints),
+      mHalfWidth(pHalfWidth > 0.0 ? pHalfWidth : 1.0)
+{
+}
+
+bool Course::IsOnRoad(double pX, double pY) const
+{
+    double nearestX = pX;
+    double nearestY = pY;
+    ProjectToRoad(pX, pY, nearestX, nearestY);
+    const double deltaX = pX - nearestX;
+    const double deltaY = pY - nearestY;
+    return deltaX * deltaX + deltaY * deltaY <= mHalfWidth * mHalfWidth;
+}
+
+void Course::ProjectToRoad(double pX, double pY, double& pOutX, double& pOutY) const
+{
+    pOutX = pX;
+    pOutY = pY;
+    if (mWaypoints.size() < 2)
+        return;
+
+    double nearestDistanceSquared = std::numeric_limits<double>::max();
+    for (int index = 0; index < static_cast<int>(mWaypoints.size()); ++index)
+    {
+        const RaceGate& start = mWaypoints[index];
+        const RaceGate& end = mWaypoints[(index + 1) % mWaypoints.size()];
+        const double directionX = end.mX - start.mX;
+        const double directionY = end.mY - start.mY;
+        const double lengthSquared = directionX * directionX + directionY * directionY;
+        if (lengthSquared == 0.0)
+            continue;
+
+        double progress = ((pX - start.mX) * directionX + (pY - start.mY) * directionY)
+            / lengthSquared;
+        progress = progress < 0.0 ? 0.0 : (progress > 1.0 ? 1.0 : progress);
+        const double candidateX = start.mX + directionX * progress;
+        const double candidateY = start.mY + directionY * progress;
+        const double deltaX = pX - candidateX;
+        const double deltaY = pY - candidateY;
+        const double distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        if (distanceSquared < nearestDistanceSquared)
+        {
+            nearestDistanceSquared = distanceSquared;
+            pOutX = candidateX;
+            pOutY = candidateY;
+        }
+    }
+}
