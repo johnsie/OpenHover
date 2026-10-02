@@ -2,9 +2,11 @@
 #ifndef OPENHOVER_AUTHORITATIVE_RACE_H
 #define OPENHOVER_AUTHORITATIVE_RACE_H
 
+#include "Course.h"
 #include "Hovercraft.h"
 #include "Lobby.h"
 
+#include <memory>
 #include <vector>
 
 struct RaceInputCommand
@@ -51,6 +53,7 @@ private:
 
     bool mActive = false;
     unsigned int mTick = 0;
+    std::unique_ptr<Course> mCourse;
     std::vector<Racer> mRacers;
 };
 

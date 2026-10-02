@@ -11,6 +11,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -224,7 +225,7 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
                 && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex)
                 && pLobby.StartRace(pClient.mPlayerId, requestedRoom->mId))
             {
-                pRaces[requestedRoom->mId] = race;
+                pRaces[requestedRoom->mId] = std::move(race);
                 BroadcastLobbySnapshot(pLobby, pClients);
                 return;
             }

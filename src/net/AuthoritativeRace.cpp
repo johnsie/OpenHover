@@ -2,6 +2,7 @@
 #include "AuthoritativeRace.h"
 
 #include "TrackDefinition.h"
+#include "WallCollision.h"
 
 #include <cmath>
 
@@ -12,6 +13,7 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
         return false;
     mRacers.clear();
     const TrackDefinition& track = tracks[pTrackIndex];
+    mCourse.reset(new Course(track.mWaypoints, track.mRoadHalfWidth));
     const RaceGate finish = track.Finish();
     const RaceGate next = track.mWaypoints.size() > 1 ? track.mWaypoints[1] : finish;
     double forwardX = next.mX - finish.mX;
@@ -67,13 +69,19 @@ void AuthoritativeRace::Step()
     if (!mActive)
         return;
     for (Racer& racer : mRacers)
+    {
         racer.mHovercraft.Step(racer.mInput, 1.0 / 120.0);
+        HovercraftState state = racer.mHovercraft.State();
+        if (ResolveCourseWallCollision(state, *mCourse))
+            racer.mHovercraft.Reset(state);
+    }
     ++mTick;
 }
 
 void AuthoritativeRace::Stop()
 {
     mActive = false;
+    mCourse.reset();
     mRacers.clear();
 }
 
