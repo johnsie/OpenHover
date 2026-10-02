@@ -7,6 +7,8 @@ void StallDetector::Reset()
 {
     mStarted = false;
     mStuckSeconds = 0.0;
+    mProgressStarted = false;
+    mProgressSeconds = 0.0;
 }
 
 bool StallDetector::Update(double pX, double pY, double pSeconds)
@@ -24,5 +26,22 @@ bool StallDetector::Update(double pX, double pY, double pSeconds)
         return false;
     mStarted = false;
     mStuckSeconds = 0.0;
+    return true;
+}
+
+bool StallDetector::UpdateProgress(double pRouteDistance, double pSeconds)
+{
+    if (!mProgressStarted || pRouteDistance >= mBestDistance + kProgressDistance)
+    {
+        mProgressStarted = true;
+        mBestDistance = pRouteDistance;
+        mProgressSeconds = 0.0;
+        return false;
+    }
+    mProgressSeconds += pSeconds;
+    if (mProgressSeconds < kProgressWindowSeconds)
+        return false;
+    mProgressStarted = false;
+    mProgressSeconds = 0.0;
     return true;
 }

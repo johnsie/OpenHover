@@ -59,5 +59,31 @@ int main()
     for (int step = 0; step < 120 * 2; ++step)
         stalled = stalled || detector.Update(50.0, 0.0, 1.0 / 120.0);
     expect(!stalled, "moving away resets the stall timer");
+
+    // Progress along the route: advancing steadily is fine; bouncing around without gaining
+    // distance stalls after eight seconds; a real gain resets the timer.
+    StallDetector progress;
+    stalled = false;
+    for (int step = 0; step < 120 * 30; ++step)
+        stalled = stalled || progress.UpdateProgress(step * 0.1, 1.0 / 120.0); // 12 m/s
+    expect(!stalled, "a craft advancing along the route is never stalled");
+    progress.Reset();
+    int firstProgressStall = -1;
+    for (int step = 0; step < 120 * 20; ++step)
+    {
+        // Wanders back and forth but never gains 12 m on its best.
+        const double distance = 100.0 + ((step / 60) % 2 == 0 ? 0.0 : 5.0);
+        if (progress.UpdateProgress(distance, 1.0 / 120.0) && firstProgressStall < 0)
+            firstProgressStall = step;
+    }
+    expect(firstProgressStall >= 120 * 8 - 2 && firstProgressStall <= 120 * 8 + 2,
+           "a craft going nowhere stalls after eight seconds");
+    progress.Reset();
+    stalled = false;
+    for (int step = 0; step < 120 * 7; ++step)
+        stalled = stalled || progress.UpdateProgress(100.0, 1.0 / 120.0);
+    for (int step = 0; step < 120 * 7; ++step)
+        stalled = stalled || progress.UpdateProgress(120.0, 1.0 / 120.0);
+    expect(!stalled, "gaining 12 m or more resets the progress timer");
     return ok ? 0 : 1;
 }

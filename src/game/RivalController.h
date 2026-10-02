@@ -35,6 +35,9 @@ public:
 
     void Reset();
     void Update(const HovercraftState& pState);
+    // Aim at the next waypoint ahead of where the craft now is. Call after the craft has been moved
+    // (for example recovered to the road), so the old target cannot be behind it or through a wall.
+    void Retarget(const HovercraftState& pState);
     HovercraftInput InputFor(const HovercraftState& pState) const;
     // Same, but steers around any craft in pOthers that is close ahead, so rivals pass each other
     // and the player instead of driving through them.

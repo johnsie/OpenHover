@@ -127,6 +127,31 @@ int main()
         return 1;
     }
 
+    // After a rival is moved (recovered), it aims at the waypoint ahead of its new position, not at
+    // whatever it was chasing before.
+    std::vector<RaceGate> loop = {{0.0, 0.0, 3.0}, {100.0, 0.0, 3.0}, {100.0, 100.0, 3.0}, {0.0, 100.0, 3.0}};
+    RivalController retargeting(loop);
+    HovercraftState onFirstSide;
+    onFirstSide.mX = 50.0;
+    onFirstSide.mY = 0.0;
+    retargeting.Retarget(onFirstSide);
+    const int afterFirst = retargeting.TargetIndex();
+    HovercraftState onThirdSide;
+    onThirdSide.mX = 50.0;
+    onThirdSide.mY = 100.0;
+    retargeting.Retarget(onThirdSide);
+    const int afterThird = retargeting.TargetIndex();
+    HovercraftState onClosingSide;
+    onClosingSide.mX = 0.0;
+    onClosingSide.mY = 50.0;
+    retargeting.Retarget(onClosingSide);
+    if (afterFirst != 1 || afterThird != 3 || retargeting.TargetIndex() != 0)
+    {
+        std::cerr << "retargeting did not aim at the next waypoint ahead: " << afterFirst << ", "
+                  << afterThird << ", " << retargeting.TargetIndex() << "\n";
+        return 1;
+    }
+
     // Driving past a parked craft in the middle of a wide road without touching it.
     std::vector<RaceGate> longRoad = {{300.0, 0.0, 3.0}, {600.0, 0.0, 3.0}};
     RivalController passer(longRoad);

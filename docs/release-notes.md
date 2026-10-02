@@ -3,6 +3,45 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.18
+
+- Small windows and layout fixes. On a window about 600 pixels tall (for example 1024 by 600) the
+  main menu no longer overlaps the title or the key hints, the local race setup rows tighten up so
+  Weapons and Back clear the hints, How To Play no longer runs its last two lines together, the
+  multiplayer lobby's action buttons and status are no longer clipped, and the Host Race panel stays
+  on screen. The Settings screen is redesigned to match the other menus: it fixes camera distance
+  choices that overlapped each other ("STANDARD" and "FAR") and the Back row sitting under the key
+  hints, at every window size. Normal-size windows are otherwise unchanged. To check a size
+  yourself, start the game with `OPENHOVER_WINDOW=1024x600`.
+- Crash reporting. If the game crashes it writes a small plain-text report (game version, what
+  went wrong, and a stack trace on Linux; no personal information) to `crash.log` in its data
+  folder. On the next start the report is kept as `last-crash.log` there, printed to the terminal,
+  and the main menu says the game closed unexpectedly, so you have something to send with a bug
+  report. (The race server does not write one yet; its log is in the service journal.)
+- Each rival name now drives its own craft class, so rivals look and handle differently: Optimus
+  Prime, Tiktok and Cooper drive Sprint craft, Data and Kryten drive Control craft, and Anne
+  Droid, Davros and Roomba drive Balanced craft. It is the same in local and online races.
+- AI rivals no longer get lost. Besides recovering when stuck in one spot, a rival that makes no
+  forward progress along the road for eight seconds (bouncing between walls, circling a corner)
+  now puts itself back on the road and re-aims at the next waypoint ahead. In about 750 test races
+  with weapons, none ended with a rival unable to finish; before the fix roughly one race in sixty
+  had one.
+- Craft classes are rebalanced. Measured with the AI driver on every track, **Control** had been
+  25 to 30 percent slower than Balanced, which made it a trap rather than a choice. Control now
+  has a higher top speed (33) and acceleration, and Sprint a slightly lower top speed (38), so the
+  AI laps about 4 to 9 percent faster in Sprint and 7 to 12 percent slower in Control than in
+  Balanced, with Control keeping its sharper turning for human drivers. An automated test keeps the
+  classes within those bands. Saved ghosts from earlier versions are discarded once, because the
+  handling they were recorded with changed.
+- Championship standings now break ties fairly. Competitors level on points are ordered by where
+  they finished the latest event, so finishing last no longer ranks you level with fourth place
+  (the panel previously showed "4TH" after a last-place finish). The top-three line follows the
+  same order.
+- The championship results panel now explains itself: the event number, the top three by points
+  using the rivals' names, your own place and points with what this event added, and what comes
+  next (the next track by name, the final results, or "series complete"). The panel is taller to
+  make room.
+
 ## 0.1.17
 
 - AI rivals now use weapons: on Standard and Expert difficulty a rival fires a missile at any craft

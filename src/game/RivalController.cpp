@@ -94,6 +94,35 @@ void RivalController::Reset()
     mTargetIndex = 0;
 }
 
+void RivalController::Retarget(const HovercraftState& pState)
+{
+    if (mRoute.size() < 2)
+        return;
+    int bestSegment = 0;
+    double bestDistanceSquared = -1.0;
+    for (std::size_t index = 0; index < mRoute.size(); ++index)
+    {
+        const RaceGate& start = mRoute[index];
+        const RaceGate& end = mRoute[(index + 1) % mRoute.size()];
+        const double directionX = end.mX - start.mX;
+        const double directionY = end.mY - start.mY;
+        const double lengthSquared = directionX * directionX + directionY * directionY;
+        double progress = lengthSquared > 0.0
+            ? ((pState.mX - start.mX) * directionX + (pState.mY - start.mY) * directionY) / lengthSquared
+            : 0.0;
+        progress = Clamp(progress, 0.0, 1.0);
+        const double deltaX = pState.mX - (start.mX + directionX * progress);
+        const double deltaY = pState.mY - (start.mY + directionY * progress);
+        const double distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        if (bestDistanceSquared < 0.0 || distanceSquared < bestDistanceSquared)
+        {
+            bestDistanceSquared = distanceSquared;
+            bestSegment = static_cast<int>(index);
+        }
+    }
+    mTargetIndex = (bestSegment + 1) % static_cast<int>(mRoute.size());
+}
+
 void RivalController::Update(const HovercraftState& pState)
 {
     if (mRoute.empty())

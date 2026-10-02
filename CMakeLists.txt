@@ -24,7 +24,7 @@ find_package(SDL2 2.0 REQUIRED CONFIG)
 find_package(OpenGL REQUIRED)
 
 # Hashing, decompression and wire-format helpers: standard library only.
-add_library(openhover_util STATIC src/util/Sha256.cpp src/util/Gunzip.cpp)
+add_library(openhover_util STATIC src/util/CrashReport.cpp src/util/Sha256.cpp src/util/Gunzip.cpp)
 target_include_directories(openhover_util PUBLIC src/util)
 
 # Track listing, name safety, and verified on-demand downloads.
@@ -58,6 +58,7 @@ target_link_libraries(OpenHoverTrackCheck PRIVATE openhover_game)
 
 add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
 target_link_libraries(OpenHover PRIVATE openhover_game openhover_input openhover_lobby SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(OpenHover PRIVATE OPENHOVER_VERSION="${OPENHOVER_PACKAGE_VERSION}")
 
 if(WIN32)
     target_link_libraries(OpenHover PRIVATE SDL2::SDL2main ws2_32)
@@ -126,6 +127,14 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(SteeringAssistSmoke tests/SteeringAssistSmoke.cpp)
     target_link_libraries(SteeringAssistSmoke PRIVATE openhover_game)
     add_test(NAME SteeringAssistSmoke COMMAND SteeringAssistSmoke)
+
+    add_executable(CrashReportSmoke tests/CrashReportSmoke.cpp)
+    target_link_libraries(CrashReportSmoke PRIVATE openhover_util)
+    add_test(NAME CrashReportSmoke COMMAND CrashReportSmoke)
+
+    add_executable(ClassBalanceSmoke tests/ClassBalanceSmoke.cpp)
+    target_link_libraries(ClassBalanceSmoke PRIVATE openhover_lobby)
+    add_test(NAME ClassBalanceSmoke COMMAND ClassBalanceSmoke)
 
     add_executable(StallDetectorSmoke tests/StallDetectorSmoke.cpp)
     target_link_libraries(StallDetectorSmoke PRIVATE openhover_game)
@@ -273,6 +282,10 @@ if(BUILD_TESTING AND NOT WIN32)
     add_test(NAME LobbySmoke COMMAND LobbySmoke)
 
     if(UNIX)
+        add_executable(ServerResilienceSmoke tests/ServerResilienceSmoke.cpp)
+        target_link_libraries(ServerResilienceSmoke PRIVATE openhover_lobby)
+        add_test(NAME ServerResilienceSmoke COMMAND ServerResilienceSmoke $<TARGET_FILE:OpenHoverServer>)
+
         add_executable(CustomTrackLobbySmoke tests/CustomTrackLobbySmoke.cpp)
         target_link_libraries(CustomTrackLobbySmoke PRIVATE openhover_lobby)
         add_test(NAME CustomTrackLobbySmoke COMMAND CustomTrackLobbySmoke $<TARGET_FILE:OpenHoverServer>)

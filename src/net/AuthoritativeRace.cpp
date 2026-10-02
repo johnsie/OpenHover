@@ -96,7 +96,14 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
         spawn.mTravelHeading = spawn.mHeading;
         racer.mHovercraft.Reset(spawn);
         if (index >= static_cast<int>(pPlayerIds.size()))
+        {
             racer.mRivalController.reset(new RivalController(track.mWaypoints));
+            // Each rival name has its own craft class, unless a test overrides it.
+            racer.mCraftClass = mUseRivalCraftClassOverride
+                ? mRivalCraftClass
+                : RivalCraftClass(static_cast<int>(racerIds[index] - kFirstAiPlayerId));
+            racer.mHovercraft.SetTuning(CraftClassTuning(racer.mCraftClass));
+        }
         mRacers.push_back(std::move(racer));
     }
     mTick = 0;
@@ -166,7 +173,12 @@ void AuthoritativeRace::Step()
                 ? mCheckpoints[progress.mNextCheckpoint] : mFinish;
             HovercraftState state = racer.mHovercraft.State();
             if (RecoverHovercraftToRoute(state, *mCourse, target, forced))
+            {
                 racer.mHovercraft.Reset(state);
+                // A recovered rival re-aims at the waypoint ahead of its new position.
+                if (racer.mRivalController)
+                    racer.mRivalController->Retarget(state);
+            }
             racer.mRecoverRequested = false;
         }
         if (racer.mRivalController)
@@ -222,8 +234,15 @@ void AuthoritativeRace::Step()
         racer.mHovercraft.Reset(state);
         // A rival wedged against a wall (after a collision or a missile, say) puts itself back on
         // the road, just as a player would with the recovery button.
-        if (racer.mRivalController && racer.mStallDetector.Update(state.mX, state.mY, 1.0 / 120.0))
-            racer.mRecoverRequested = true;
+        if (racer.mRivalController)
+        {
+            // Stuck in one spot, or moving without getting anywhere (bouncing, circling a corner).
+            const bool stuckInPlace = racer.mStallDetector.Update(state.mX, state.mY, 1.0 / 120.0);
+            const bool goingNowhere = racer.mStallDetector.UpdateProgress(
+                racer.mRouteTracker.Update(*mCourse, state.mX, state.mY), 1.0 / 120.0);
+            if (stuckInPlace || goingNowhere)
+                racer.mRecoverRequested = true;
+        }
         racer.mRace.Update(state.mX, state.mY, 1.0 / 120.0);
         racer.mLapTimer.Update(racer.mRace.Progress());
     }

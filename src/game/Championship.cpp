@@ -34,6 +34,7 @@ void Championship::Reset()
     mCompetitorCount = 0;
     mCompetitorPoints.clear();
     mLastPointsAwarded.clear();
+    mLastPositions.clear();
     mEventRecorded = false;
     mComplete = false;
 }
@@ -63,6 +64,7 @@ bool Championship::RecordResults(const std::vector<int>& pPositions)
     if (mCompetitorPoints.empty())
         mCompetitorPoints.assign(mCompetitorCount, 0);
     mLastPointsAwarded.assign(mCompetitorCount, 0);
+    mLastPositions = pPositions;
     for (int competitorIndex = 0; competitorIndex < mCompetitorCount; ++competitorIndex)
     {
         mLastPointsAwarded[competitorIndex] = PointsForPosition(pPositions[competitorIndex]);
@@ -95,9 +97,17 @@ int Championship::StandingForCompetitor(int pCompetitorIndex) const
     int standing = 1;
     for (int competitorIndex = 0; competitorIndex < static_cast<int>(mCompetitorPoints.size()); ++competitorIndex)
     {
-        if (mCompetitorPoints[competitorIndex] > mCompetitorPoints[pCompetitorIndex]
-            || (mCompetitorPoints[competitorIndex] == mCompetitorPoints[pCompetitorIndex]
-                && competitorIndex < pCompetitorIndex))
+        if (competitorIndex == pCompetitorIndex)
+            continue;
+        const bool morePoints = mCompetitorPoints[competitorIndex] > mCompetitorPoints[pCompetitorIndex];
+        const bool levelPoints = mCompetitorPoints[competitorIndex] == mCompetitorPoints[pCompetitorIndex];
+        const int otherPlace = competitorIndex < static_cast<int>(mLastPositions.size())
+            ? mLastPositions[competitorIndex] : 0;
+        const int thisPlace = pCompetitorIndex < static_cast<int>(mLastPositions.size())
+            ? mLastPositions[pCompetitorIndex] : 0;
+        const bool betterLastFinish = otherPlace < thisPlace;
+        const bool sameLastFinish = otherPlace == thisPlace;
+        if (morePoints || (levelPoints && (betterLastFinish || (sameLastFinish && competitorIndex < pCompetitorIndex))))
             ++standing;
     }
     return standing;

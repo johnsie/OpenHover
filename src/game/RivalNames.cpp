@@ -26,6 +26,17 @@ std::string RivalName(int pPoolIndex)
     return name;
 }
 
+CraftClass RivalCraftClass(int pPoolIndex)
+{
+    // Anne Droid, Data, Optimus Prime, Davros, Tiktok, Kryten, Roomba, Cooper.
+    static const CraftClass classes[kNameCount] = {
+        CraftClass::Balanced, CraftClass::Control, CraftClass::Sprint, CraftClass::Balanced,
+        CraftClass::Sprint, CraftClass::Control, CraftClass::Balanced, CraftClass::Sprint};
+    if (pPoolIndex < 0 || pPoolIndex >= kNameCount)
+        return CraftClass::Balanced;
+    return classes[pPoolIndex];
+}
+
 std::vector<int> PickRivalNames(int pCount, unsigned int pSeed)
 {
     std::vector<int> pool(kNameCount);

@@ -148,6 +148,7 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/TrackLoader.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | loads and validates custom track files |
 | `tests/TrackLoaderSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | custom track loading and rejection test |
 | `tests/CustomTrackLobbySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | custom track hash enforcement against a real server |
+| `tests/ServerResilienceSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | racer drop-out and server restart integration test |
 | `src/game/TrackHash.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track content hash and online-safe name API |
 | `src/game/TrackHash.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | SHA-256 of canonical track text |
 | `tests/TrackHashSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | track hash stability and sensitivity test |
@@ -160,6 +161,10 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/StallDetector.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stalled craft detection API |
 | `src/game/StallDetector.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stuck-in-place timer |
 | `tests/StallDetectorSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | stall detection test |
+| `tests/ClassBalanceSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | craft class lap time balance test on every track |
+| `src/util/CrashReport.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash report API |
+| `src/util/CrashReport.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash signal and terminate handlers writing a plain-text report |
+| `tests/CrashReportSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash report contents test |
 | `src/game/GhostLibrary.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best-run ghost store API |
 | `src/game/GhostLibrary.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best ghost selection and versioned persistence |
 | `tests/GhostLibrarySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ghost selection and persistence test |

@@ -15,6 +15,7 @@
 #include "Lobby.h"
 #include "Missile.h"
 #include "CameraRig.h"
+#include "CrashReport.h"
 #include "KeyBindings.h"
 #include "PadBindings.h"
 #include "PadMenuInput.h"
@@ -46,6 +47,7 @@
 #include <cstring>
 #include <cstdio>
 #include <sstream>
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -507,6 +509,37 @@ bool LocalSetupOptionVisible(RaceMode pRaceMode, int pOption)
     if (pOption == 4 || pOption == 5)
         return RaceModeUsesRivals(pRaceMode);
     return pOption >= 0 && pOption < 10;
+}
+
+// Where a row of the main menu goes. Rows shrink on short windows so the menu clears the title
+// above it and the key hints below it.
+void WelcomeRowGeometry(int pWidth, int pHeight, int pOption, int& pLeft, int& pTop, int& pRowWidth,
+                        int& pRowHeight)
+{
+    const int firstTop = pHeight >= 700 ? 145 : 190;
+    const int step = std::min(64, (pHeight - 100 - firstTop) / 6);
+    // Keep clear of the title block on the left when the window is narrow.
+    pLeft = std::min(pWidth - 410, std::max(pWidth / 2 - 200, 450));
+    pTop = firstTop + pOption * step;
+    pRowWidth = 400;
+    pRowHeight = step - 8;
+}
+
+// Where a row of the local race setup goes: 46 pixels apart when there is room, closer together on
+// short windows so the last rows clear the key hints at the bottom. The row box is 40 high at the
+// normal spacing and shrinks with it.
+void LocalSetupRowGeometry(int pHeight, int pRowCount, int pRow, int& pTop, int& pHeight2)
+{
+    const int step = std::max(30, std::min(46, (pHeight - 100 - 120) / std::max(1, pRowCount)));
+    pTop = 120 + pRow * step;
+    pHeight2 = step - 6;
+}
+
+// Left edge of each camera distance choice on the Settings screen's camera row.
+int SettingsCameraOptionX(int pWidth, int pOption)
+{
+    static const int offsets[3] = {44, 104, 206};
+    return pWidth / 2 + offsets[pOption < 0 ? 0 : (pOption > 2 ? 2 : pOption)];
 }
 
 int LocalSetupOptionRow(RaceMode pRaceMode, int pOption)
@@ -2221,6 +2254,10 @@ void DrawSetupOverlay(int pWidth, int pHeight)
 }
 
 std::string gRaceWinnerName;
+// A note on the main menu, for example that the game closed unexpectedly last time.
+std::string gStartupNotice;
+// Championship results panel: standings by name, and what comes next.
+std::vector<std::string> gChampionshipLines;
 // Built-in tracks first, then any valid custom tracks from the player's tracks folder. Online
 // rooms only ever use the built-in tracks at the front of this list.
 std::vector<TrackDefinition> gLocalTracks;
@@ -2314,6 +2351,13 @@ GhostLibrary gGhostLibrary;
 // a name.
 std::vector<int> gRivalNameSlots = PickRivalNames(7, 1);
 
+CraftClass LocalRivalCraftClass(int pRivalIndex)
+{
+    if (pRivalIndex >= 0 && pRivalIndex < static_cast<int>(gRivalNameSlots.size()))
+        return RivalCraftClass(gRivalNameSlots[pRivalIndex]);
+    return CraftClass::Balanced;
+}
+
 std::string LocalRivalName(int pRivalIndex)
 {
     if (pRivalIndex >= 0 && pRivalIndex < static_cast<int>(gRivalNameSlots.size()))
@@ -2329,7 +2373,7 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
                        CraftClass pCraftClass, int pSelection, int pWidth, int pHeight)
 {
     const int panelWidth = 620;
-    const int panelHeight = pChampionship ? 350 : 352;
+    const int panelHeight = pChampionship ? 408 : 352;
     const int left = (pWidth - panelWidth) / 2;
     const int top = (pHeight - panelHeight) / 2 - 10;
     glColor3f(0.02f, 0.05f, 0.08f);
@@ -2444,9 +2488,16 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("SERIES UPDATE", left + 116, top + 224, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText(pChampionshipPoints, left + 42, top + 254, 2);
+        for (std::size_t line = 0; line < gChampionshipLines.size(); ++line)
+        {
+            // The last line says what happens next, so it is picked out in yellow.
+            if (line + 1 == gChampionshipLines.size() && line > 0)
+                glColor3f(1.0f, 0.86f, 0.1f);
+            DrawPixelText(gChampionshipLines[line].c_str(), left + 42, top + 254 + static_cast<int>(line) * 24, 2);
+        }
+        (void)pChampionshipPoints;
     }
-    const int actionsTop = top + 294 - (pChampionship ? 0 : 2);
+    const int actionsTop = top + (pChampionship ? 352 : 292);
     for (int action = 0; action < 3; ++action)
     {
         const int actionLeft = left + 24 + action * 194;
@@ -3183,25 +3234,33 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         DrawMenuHovercraft(pWidth / 4, pHeight / 2 + 125);
 
         const char* options[] = {"PLAY LOCAL GAME", "MULTIPLAYER", "HOW TO PLAY", "SETTINGS", "TRACK EDITOR", "QUIT"};
-        const int panelLeft = pWidth / 2 - 200;
-        const int panelTop = 145;
         for (int option = 0; option < 6; ++option)
         {
-            const int top = panelTop + option * 64;
+            int panelLeft = 0;
+            int top = 0;
+            int rowWidth = 0;
+            int rowHeight = 0;
+            WelcomeRowGeometry(pWidth, pHeight, option, panelLeft, top, rowWidth, rowHeight);
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
             glBegin(GL_QUADS);
             glVertex2i(panelLeft, top);
-            glVertex2i(panelLeft + 400, top);
-            glVertex2i(panelLeft + 400, top + 56);
-            glVertex2i(panelLeft, top + 56);
+            glVertex2i(panelLeft + rowWidth, top);
+            glVertex2i(panelLeft + rowWidth, top + rowHeight);
+            glVertex2i(panelLeft, top + rowHeight);
             glEnd();
             glColor3f(selected ? 1.0f : 0.56f, selected ? 0.82f : 0.72f,
                       selected ? 0.22f : 0.76f);
-            DrawPixelText(options[option], panelLeft + 68, top + 17, 3);
+            DrawPixelText(options[option], panelLeft + 68, top + (rowHeight - 21) / 2, 3);
         }
         glColor3f(0.72f, 0.82f, 0.84f);
+        if (!gStartupNotice.empty())
+        {
+            glColor3f(1.0f, 0.6f, 0.25f);
+            DrawPixelText(gStartupNotice.c_str(), 24, pHeight - 24, 1);
+            glColor3f(0.72f, 0.82f, 0.84f);
+        }
         DrawPixelText("UP DOWN TO SELECT", pWidth / 2 - 132, pHeight - 82, 3);
         DrawPixelText("ENTER TO CONFIRM", pWidth / 2 - 120, pHeight - 52, 3);
     }
@@ -3222,9 +3281,11 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         const int gap = 12;
         const int top = 16;
         const int leftWidth = pWidth * 29 / 100;
-        const int actionWidth = pWidth * 15 / 100;
+        // The action column needs room for its buttons and status text even on narrow windows.
+        const int actionWidth = std::max(pWidth * 15 / 100, 210);
         const int detailWidth = pWidth - margin * 2 - gap * 2 - leftWidth - actionWidth;
-        const int topHeight = pHeight * 42 / 100;
+        // Tall enough for the action column: two buttons, status text, and the Back button.
+        const int topHeight = std::max(pHeight * 42 / 100, 290);
         const int bottomTop = top + topHeight + gap;
         const int bottomHeight = pHeight - bottomTop - margin;
         const int detailLeft = margin + leftWidth + gap;
@@ -3369,8 +3430,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         }
         else
         {
-            DrawPixelText("SELECT A RACE IN THE LIST", previewLeft + previewSize + 16, previewTop + 4, 2);
-            DrawPixelText("TO SEE ITS TRACK LAPS", previewLeft + previewSize + 16, previewTop + 28, 2);
+            DrawPixelText("SELECT A RACE TO SEE", previewLeft + previewSize + 16, previewTop + 4, 2);
+            DrawPixelText("ITS TRACK AND LAPS", previewLeft + previewSize + 16, previewTop + 28, 2);
             DrawPixelText("WEAPONS AND PLAYERS", previewLeft + previewSize + 16, previewTop + 52, 2);
         }
 
@@ -3480,7 +3541,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glVertex2i(0, pHeight);
         glEnd();
         const int panelLeft = pWidth / 2 - 280;
-        const int panelTop = 72;
+        // 72 down from the top, or higher on a short window so the whole panel stays on screen.
+        const int panelTop = std::max(8, std::min(72, pHeight - 538 - 8));
         glColor3f(0.105f, 0.105f, 0.13f);
         glBegin(GL_QUADS);
         glVertex2i(panelLeft, panelTop);
@@ -3565,15 +3627,17 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 + padName(PadAction::Recover) + " RECOVER",
             "ALT  GHOST: BEST RUN, LAST RUN, OR OFF",
             "ESC OR START  PAUSE AND KEY BINDINGS"};
+        // Tighten the lines on short windows so the guidance clears "ENTER TO RETURN" below it.
+        const int lineStep = std::max(24, std::min(34, (pHeight - 150 - 130) / 10));
         int lineTop = 150;
         for (const std::string& line : lines)
         {
             DrawPixelText(line.c_str(), pWidth / 2 - PixelTextWidth(line.c_str(), 2) / 2, lineTop, 2);
-            lineTop += 34;
+            lineTop += lineStep;
         }
         glColor3f(1.0f, 0.86f, 0.1f);
         const char* guidance = "FOLLOW THE FLASHING WALL ARROWS";
-        DrawPixelText(guidance, pWidth / 2 - PixelTextWidth(guidance, 3) / 2, lineTop + 20, 3);
+        DrawPixelText(guidance, pWidth / 2 - PixelTextWidth(guidance, 3) / 2, lineTop + 12, 3);
         glColor3f(1.0f, 0.78f, 0.12f);
         DrawPixelText("ENTER TO RETURN", pWidth / 2 - 120, pHeight - 70, 3);
     }
@@ -3588,15 +3652,20 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             const int row = LocalSetupOptionRow(pRaceMode, option);
             if (row < 0)
                 continue;
-            const int top = 120 + row * 46;
+            int boxTop = 0;
+            int boxHeight = 0;
+            LocalSetupRowGeometry(pHeight, LocalSetupOptionRow(pRaceMode, 9) + 1, row, boxTop, boxHeight);
+            // Text is laid out for a 40-pixel row, low in the box; move it up by however much the
+            // row has been shortened.
+            const int top = boxTop + (boxHeight - 40);
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
             glBegin(GL_QUADS);
-            glVertex2i(pWidth / 2 - 250, top);
-            glVertex2i(pWidth / 2 + 250, top);
-            glVertex2i(pWidth / 2 + 250, top + 40);
-            glVertex2i(pWidth / 2 - 250, top + 40);
+            glVertex2i(pWidth / 2 - 250, boxTop);
+            glVertex2i(pWidth / 2 + 250, boxTop);
+            glVertex2i(pWidth / 2 + 250, boxTop + boxHeight);
+            glVertex2i(pWidth / 2 - 250, boxTop + boxHeight);
             glEnd();
             glColor3f(selected ? 1.0f : 0.72f, selected ? 0.82f : 0.86f,
                       selected ? 0.22f : 0.9f);
@@ -3626,7 +3695,7 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 DrawPixelText(RivalDifficultySetupLabel(pRivalDifficulty), pWidth / 2 + 18, top + 19, 2);
             else if (option == 6)
             {
-                DrawPixelText(CraftClassName(pCraftClass), pWidth / 2 + 112, top + 10, 3);
+                DrawPixelText(CraftClassName(pCraftClass), pWidth / 2 + 96, top + 10, 3);
                 DrawPixelText(CraftClassDescription(pCraftClass), pWidth / 2 + 18, top + 29, 1);
             }
             else if (option == 7)
@@ -3676,42 +3745,53 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     else
     {
         glColor3f(0.2f, 0.9f, 1.0f);
-        DrawPixelText("SETTINGS", pWidth / 2 - 120, 90, 5);
-        glColor3f(pSelection == 0 ? 1.0f : 0.82f, pSelection == 0 ? 0.78f : 0.9f,
-                  pSelection == 0 ? 0.12f : 0.92f);
-        DrawPixelText("DISPLAY NAME", pWidth / 2 - 105, 160, 3);
-        DrawPixelText(gPlayerDisplayName.empty() ? "NOT SET" : gPlayerDisplayName.c_str(),
-                      pWidth / 2 - 105, 200, 3);
-        glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.78f : 0.9f,
-                  pSelection == 1 ? 0.12f : 0.92f);
-        DrawPixelText("CAMERA DISTANCE", pWidth / 2 - 135, 245, 3);
-        const char* cameraOptions[] = {"NEAR", "STANDARD", "FAR"};
-        for (int option = 0; option < 3; ++option)
+        DrawPixelText("SETTINGS", pWidth / 2 - 120, 60, 5);
+        const char* settingLabels[] = {"DISPLAY NAME", "CAMERA DISTANCE", "AUDIO FEEDBACK",
+                                       "MENU VOLUME", "RACE VOLUME", "BACK"};
+        for (int row = 0; row < 6; ++row)
         {
-            if (option == pCameraDistanceSetting)
-                glColor3f(1.0f, 0.78f, 0.12f);
-            else
-                glColor3f(0.82f, 0.9f, 0.92f);
-            DrawPixelText(cameraOptions[option], pWidth / 2 - 128 + option * 104, 285, 3);
+            int boxTop = 0;
+            int boxHeight = 0;
+            LocalSetupRowGeometry(pHeight, 6, row, boxTop, boxHeight);
+            const int textTop = boxTop + (boxHeight - 40);
+            const bool selected = row == pSelection;
+            glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f, selected ? 0.62f : 0.14f);
+            glBegin(GL_QUADS);
+            glVertex2i(pWidth / 2 - 250, boxTop);
+            glVertex2i(pWidth / 2 + 250, boxTop);
+            glVertex2i(pWidth / 2 + 250, boxTop + boxHeight);
+            glVertex2i(pWidth / 2 - 250, boxTop + boxHeight);
+            glEnd();
+            glColor3f(selected ? 1.0f : 0.72f, selected ? 0.82f : 0.86f, selected ? 0.22f : 0.9f);
+            DrawPixelText(settingLabels[row], pWidth / 2 - 238, textTop + 16, 3);
+            if (row == 0)
+            {
+                std::string name = gPlayerDisplayName.empty() ? std::string("NOT SET") : gPlayerDisplayName;
+                if (name.size() > 12)
+                    name.resize(12);
+                DrawPixelText(name.c_str(), pWidth / 2 + 34, textTop + 19, 2);
+            }
+            else if (row == 1)
+            {
+                const char* cameraOptions[] = {"NEAR", "STANDARD", "FAR"};
+                for (int option = 0; option < 3; ++option)
+                {
+                    if (option == pCameraDistanceSetting)
+                        glColor3f(1.0f, 0.78f, 0.12f);
+                    else
+                        glColor3f(0.62f, 0.72f, 0.76f);
+                    DrawPixelText(cameraOptions[option], SettingsCameraOptionX(pWidth, option), textTop + 19, 2);
+                }
+            }
+            else if (row == 2)
+                DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 + 120, textTop + 16, 3);
+            else if (row == 3 || row == 4)
+            {
+                char volumeLabel[16];
+                std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", row == 3 ? pMenuVolume : pRaceVolume);
+                DrawPixelText(volumeLabel, pWidth / 2 + 120, textTop + 16, 3);
+            }
         }
-        glColor3f(pSelection == 2 ? 1.0f : 0.82f, pSelection == 2 ? 0.78f : 0.9f,
-                  pSelection == 2 ? 0.12f : 0.92f);
-        DrawPixelText("AUDIO FEEDBACK", pWidth / 2 - 120, 375, 3);
-        DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 - 24, 420, 3);
-        glColor3f(pSelection == 3 ? 1.0f : 0.82f, pSelection == 3 ? 0.78f : 0.9f,
-                  pSelection == 3 ? 0.12f : 0.92f);
-        DrawPixelText("MENU VOLUME", pWidth / 2 - 102, 465, 3);
-        char volumeLabel[16];
-        std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", pMenuVolume);
-        DrawPixelText(volumeLabel, pWidth / 2 - 18, 505, 3);
-        glColor3f(pSelection == 4 ? 1.0f : 0.82f, pSelection == 4 ? 0.78f : 0.9f,
-                  pSelection == 4 ? 0.12f : 0.92f);
-        DrawPixelText("RACE VOLUME", pWidth / 2 - 102, 545, 3);
-        std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", pRaceVolume);
-        DrawPixelText(volumeLabel, pWidth / 2 - 18, 580, 3);
-        glColor3f(pSelection == 5 ? 1.0f : 0.82f, pSelection == 5 ? 0.78f : 0.9f,
-                  pSelection == 5 ? 0.12f : 0.92f);
-        DrawPixelText("BACK", pWidth / 2 - 42, 615, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
         DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", pWidth / 2 - 230, pHeight - 94, 2);
         glColor3f(1.0f, 0.78f, 0.12f);
@@ -4490,8 +4570,24 @@ int main(int pArgumentCount, char* pArguments[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    // OPENHOVER_WINDOW=WIDTHxHEIGHT starts the game in a window of that size, for checking how the
+    // screens lay out on small displays.
+    int windowWidth = kWindowWidth;
+    int windowHeight = kWindowHeight;
+    if (const char* sizeOverride = std::getenv("OPENHOVER_WINDOW"))
+    {
+        int requestedWidth = 0;
+        int requestedHeight = 0;
+        if (std::sscanf(sizeOverride, "%dx%d", &requestedWidth, &requestedHeight) == 2
+            && requestedWidth >= 640 && requestedWidth <= 7680 && requestedHeight >= 480
+            && requestedHeight <= 4320)
+        {
+            windowWidth = requestedWidth;
+            windowHeight = requestedHeight;
+        }
+    }
     SDL_Window* window = SDL_CreateWindow("OpenHover", SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED, kWindowWidth, kWindowHeight,
+                                          SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight,
                                           SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     SDL_GLContext context = window == nullptr ? nullptr : SDL_GL_CreateContext(window);
     if (context == nullptr)
@@ -4537,6 +4633,23 @@ int main(int pArgumentCount, char* pArguments[])
     gLocalTracks = BuiltInTracks();
     if (char* trackPrefix = SDL_GetPrefPath("OpenHover", "OpenHover"))
     {
+        // If the game crashes it leaves crash.log here; on the next start the report is kept as
+        // last-crash.log so the player can send it with a bug report.
+        const std::string crashLog = std::string(trackPrefix) + "crash.log";
+        const std::string previousCrash = TakePreviousCrashReport(crashLog);
+        if (!previousCrash.empty())
+        {
+            const std::string keptLog = std::string(trackPrefix) + "last-crash.log";
+            if (FILE* kept = std::fopen(keptLog.c_str(), "wb"))
+            {
+                std::fwrite(previousCrash.data(), 1, previousCrash.size(), kept);
+                std::fclose(kept);
+            }
+            std::fprintf(stderr, "OpenHover closed unexpectedly last time. Report saved to %s\n%s",
+                         keptLog.c_str(), previousCrash.c_str());
+            gStartupNotice = "OPENHOVER CLOSED UNEXPECTEDLY LAST TIME - REPORT SAVED AS LAST-CRASH.LOG";
+        }
+        InstallCrashReport(crashLog, OPENHOVER_VERSION);
         std::vector<std::string> trackMessages;
         const std::vector<TrackDefinition> customTracks = LoadCustomTracks(
             std::string(trackPrefix) + "tracks", gLocalTracks, trackMessages);
@@ -4668,6 +4781,7 @@ int main(int pArgumentCount, char* pArguments[])
     Missile missile;
     std::vector<Missile> rivalMissiles(kRivalCount);
     std::vector<StallDetector> rivalStalls(kRivalCount);
+    std::vector<RouteTracker> rivalRoutes(kRivalCount);
     bool fireHeld = false;
     double impactSoundCooldown = 0.0;
     Uint32 checkpointVisualUntil = 0;
@@ -4722,12 +4836,17 @@ int main(int pArgumentCount, char* pArguments[])
             rivalMissile.Reset();
         for (StallDetector& rivalStall : rivalStalls)
             rivalStall.Reset();
+        for (RouteTracker& rivalRoute : rivalRoutes)
+            rivalRoute.Reset();
         fireHeld = false;
         checkpointVisualUntil = 0;
         boostVisualUntil = 0;
         impactVisualUntil = 0;
         gRivalNameSlots = PickRivalNames(kRivalCount, static_cast<unsigned int>(
             SDL_GetPerformanceCounter() ^ (SDL_GetTicks() * 2654435761u)));
+        // Each rival drives the craft class that goes with its name.
+        for (int rivalIndex = 0; rivalIndex < kRivalCount; ++rivalIndex)
+            rivals[rivalIndex].SetTuning(CraftClassTuning(LocalRivalCraftClass(rivalIndex)));
         hovercraft.Reset(spawn);
         gCameraRig.Reset(spawn.mHeading);
         race.Reset();
@@ -5954,9 +6073,18 @@ int main(int pArgumentCount, char* pArguments[])
                 const int mouseY = event.button.y * drawableHeight / std::max(1, windowHeight);
                 if (frontScreen == FrontScreen::Welcome)
                 {
-                    const int option = (mouseY - 145) / 64;
-                    if (option >= 0 && option < 6
-                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 200, 145 + option * 64, 400, 56))
+                    int option = -1;
+                    for (int candidate = 0; candidate < 6; ++candidate)
+                    {
+                        int rowLeft = 0;
+                        int rowTop = 0;
+                        int rowWidth = 0;
+                        int rowHeight = 0;
+                        WelcomeRowGeometry(drawableWidth, drawableHeight, candidate, rowLeft, rowTop, rowWidth, rowHeight);
+                        if (IsPointInRect(mouseX, mouseY, rowLeft, rowTop, rowWidth, rowHeight))
+                            option = candidate;
+                    }
+                    if (option >= 0)
                     {
                         if (option == 0)
                         {
@@ -5991,9 +6119,9 @@ int main(int pArgumentCount, char* pArguments[])
                     const int gap = 12;
                     const int top = 16;
                     const int leftWidth = drawableWidth * 29 / 100;
-                    const int actionWidth = drawableWidth * 15 / 100;
+                    const int actionWidth = std::max(drawableWidth * 15 / 100, 210);
                     const int detailWidth = drawableWidth - margin * 2 - gap * 2 - leftWidth - actionWidth;
-                    const int topHeight = drawableHeight * 42 / 100;
+                    const int topHeight = std::max(drawableHeight * 42 / 100, 290);
                     const int actionLeft = margin + leftWidth + gap + detailWidth + gap;
                     const int chatLeft = margin + leftWidth + gap + 16;
                     const int chatWidth = detailWidth + gap + actionWidth - 32;
@@ -6035,7 +6163,7 @@ int main(int pArgumentCount, char* pArguments[])
                 else if (frontScreen == FrontScreen::HostRaceSetup)
                 {
                     const int panelLeft = drawableWidth / 2 - 280;
-                    const int panelTop = 72;
+                    const int panelTop = std::max(8, std::min(72, drawableHeight - 538 - 8));
                     const int option = (mouseY - (panelTop + 82)) / 46;
                     if (option >= 0 && option < 9
                         && IsPointInRect(mouseX, mouseY, panelLeft + 18, panelTop + 82 + option * 46, 524, 36))
@@ -6055,37 +6183,54 @@ int main(int pArgumentCount, char* pArguments[])
                     frontScreen = FrontScreen::Welcome;
                 else if (frontScreen == FrontScreen::Settings)
                 {
-                    if (mouseY >= 130 && mouseY < 220)
+                    int clickedRow = -1;
+                    for (int row = 0; row < 6; ++row)
+                    {
+                        int rowTop = 0;
+                        int rowHeight = 0;
+                        LocalSetupRowGeometry(drawableHeight, 6, row, rowTop, rowHeight);
+                        if (IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250, rowTop, 500, rowHeight))
+                            clickedRow = row;
+                    }
+                    settingsSelection = clickedRow >= 0 ? clickedRow : settingsSelection;
+                    if (clickedRow == 0)
                     {
                         gDisplayNameSetupConnectsToLobby = false;
                         frontScreen = FrontScreen::DisplayNameSetup;
                         SDL_StartTextInput();
                     }
-                    else if (mouseY >= 260 && mouseY < 320)
+                    else if (clickedRow == 1)
                     {
-                        cameraDistanceSetting = std::max(0, std::min(2, (mouseX - (drawableWidth / 2 - 150)) / 104));
+                        // Pick the choice nearest the click.
+                        int best = 0;
+                        for (int option = 1; option < 3; ++option)
+                        {
+                            if (mouseX >= SettingsCameraOptionX(drawableWidth, option) - 8)
+                                best = option;
+                        }
+                        cameraDistanceSetting = best;
                         savePreferences();
                     }
-                    else if (mouseY >= 370 && mouseY < 450)
+                    else if (clickedRow == 2)
                     {
                         audioFeedback.SetEnabled(!audioFeedback.Enabled());
                         savePreferences();
                     }
-                    else if (mouseY >= 455 && mouseY < 540)
+                    else if (clickedRow == 3)
                     {
                         const int volume = (static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5) + 25)
                             % 125;
                         audioFeedback.SetMenuVolume(volume / 100.0);
                         savePreferences();
                     }
-                    else if (mouseY >= 540 && mouseY < 605)
+                    else if (clickedRow == 4)
                     {
                         const int volume = (static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5) + 25)
                             % 125;
                         audioFeedback.SetRaceVolume(volume / 100.0);
                         savePreferences();
                     }
-                    else if (mouseY >= 605 && mouseY < 650)
+                    else if (clickedRow == 5)
                         frontScreen = FrontScreen::Welcome;
                 }
                 else if (frontScreen == FrontScreen::DisplayNameSetup)
@@ -6112,8 +6257,12 @@ int main(int pArgumentCount, char* pArguments[])
                     for (int option = 0; option < 10; ++option)
                     {
                         const int row = LocalSetupOptionRow(raceMode, option);
+                        int rowTop = 0;
+                        int rowHeight = 0;
+                        LocalSetupRowGeometry(drawableHeight, LocalSetupOptionRow(raceMode, 9) + 1, row,
+                                              rowTop, rowHeight);
                         if (row >= 0 && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250,
-                                                     120 + row * 46, 500, 40))
+                                                     rowTop, 500, rowHeight))
                         {
                             clickedOption = option;
                             break;
@@ -6184,10 +6333,10 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 else if (winner != 0 && !continueDriving)
                 {
-                    const int panelHeight = raceMode == RaceMode::Championship ? 350 : 352;
+                    const int panelHeight = raceMode == RaceMode::Championship ? 408 : 352;
                     const int left = (drawableWidth - 620) / 2;
                     const int top = (drawableHeight - panelHeight) / 2 - 10;
-                    const int actionsTop = top + 294 - (raceMode == RaceMode::Championship ? 0 : 2);
+                    const int actionsTop = top + (raceMode == RaceMode::Championship ? 352 : 292);
                     if (IsPointInRect(mouseX, mouseY, left + 24, actionsTop, 178, 38))
                     {
                         resultSelection = 0;
@@ -6847,12 +6996,19 @@ int main(int pArgumentCount, char* pArguments[])
                             rivalMissiles[rivalIndex].Fire(rivals[rivalIndex].State());
                         // A rival stuck against a wall puts itself back on the road, like a player
                         // pressing recover.
-                        if (rivalStalls[rivalIndex].Update(rivals[rivalIndex].State().mX,
-                                                           rivals[rivalIndex].State().mY, seconds))
+                        const bool stuckInPlace = rivalStalls[rivalIndex].Update(
+                            rivals[rivalIndex].State().mX, rivals[rivalIndex].State().mY, seconds);
+                        const bool goingNowhere = rivalStalls[rivalIndex].UpdateProgress(
+                            rivalRoutes[rivalIndex].Update(course, rivals[rivalIndex].State().mX,
+                                                           rivals[rivalIndex].State().mY), seconds);
+                        if (stuckInPlace || goingNowhere)
                         {
                             HovercraftState recovered = rivals[rivalIndex].State();
                             if (RecoverHovercraftToRoute(recovered, course, finish, true))
+                            {
                                 rivals[rivalIndex].Reset(recovered);
+                                rivalControllers[rivalIndex].Retarget(recovered);
+                            }
                         }
                     }
                     for (int rivalIndex = 0; rivalIndex < rivalCount; ++rivalIndex)
@@ -7081,6 +7237,51 @@ int main(int pArgumentCount, char* pArguments[])
                           championship.PlayerPoints(), championship.LastPointsAwarded(0),
                           championship.StandingForCompetitor(0), championship.CompetitorCount());
         }
+        gChampionshipLines.clear();
+        if (raceMode == RaceMode::Championship && championship.CompetitorCount() > 0)
+        {
+            // Line 1: where we are in the series.
+            gChampionshipLines.push_back("EVENT " + std::to_string(championship.CurrentEvent() + 1) + " OF "
+                                         + std::to_string(championship.EventCount()));
+            // Line 2: the top three, by points, using rivals' names (first word, at most six letters).
+            std::vector<int> order;
+            for (int competitor = 0; competitor < championship.CompetitorCount(); ++competitor)
+                order.push_back(competitor);
+            std::sort(order.begin(), order.end(), [&](int pLeft, int pRight)
+            {
+                return championship.StandingForCompetitor(pLeft) < championship.StandingForCompetitor(pRight);
+            });
+            std::string leaders;
+            for (std::size_t rank = 0; rank < order.size() && rank < 3; ++rank)
+            {
+                const int competitor = order[rank];
+                std::string name = competitor == 0 ? "YOU" : LocalRivalName(competitor - 1);
+                name = name.substr(0, name.find(' '));
+                for (char& c : name)
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                if (name.size() > 6)
+                    name.resize(6);
+                if (!leaders.empty())
+                    leaders += "  ";
+                leaders += name + " " + std::to_string(championship.CompetitorPoints(competitor));
+            }
+            gChampionshipLines.push_back(leaders);
+            // Line 3: how the player is doing, and what this event added.
+            const int standing = championship.StandingForCompetitor(0);
+            const char* suffix = (standing % 100 >= 11 && standing % 100 <= 13) ? "TH"
+                : standing % 10 == 1 ? "ST" : standing % 10 == 2 ? "ND" : standing % 10 == 3 ? "RD" : "TH";
+            // (The pixel font has no colon, plus or brackets, so the wording avoids them.)
+            gChampionshipLines.push_back("YOU " + std::to_string(standing) + suffix + "  "
+                                         + std::to_string(championship.PlayerPoints()) + " POINTS  ADDED "
+                                         + std::to_string(championship.LastPointsAwarded(0)));
+            // Line 4: what comes next.
+            if (championship.Complete())
+                gChampionshipLines.push_back("SERIES COMPLETE");
+            else if (championship.CurrentEvent() + 1 >= championship.EventCount())
+                gChampionshipLines.push_back("NEXT  FINAL RESULTS");
+            else
+                gChampionshipLines.push_back("NEXT  " + LocalTrackName(championship.CurrentEvent() + 1));
+        }
         if (frontScreen == FrontScreen::OnlineRace)
             std::snprintf(title, sizeof(title), "OpenHover | Online Race | Server tick %u", gOnlineRaceTick);
         else if (frontScreen != FrontScreen::RaceSetup)
@@ -7295,7 +7496,7 @@ int main(int pArgumentCount, char* pArguments[])
         if (RaceModeUsesRivals(raceMode))
         {
             for (int rivalIndex = 0; rivalIndex < static_cast<int>(rivalStates.size()); ++rivalIndex)
-                DrawHovercraft(rivalStates[rivalIndex], true, false, CraftClass::Balanced, rivalIndex + 2);
+                DrawHovercraft(rivalStates[rivalIndex], true, false, LocalRivalCraftClass(rivalIndex), rivalIndex + 2);
         }
         if (ghostActive && gGhostMode != 0)
             DrawHovercraft(replayGhost.State(), false, true, playerCraftClass, 1);

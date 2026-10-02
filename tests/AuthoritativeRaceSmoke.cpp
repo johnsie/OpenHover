@@ -86,6 +86,9 @@ int main()
     // in the first twenty seconds of racing, and the missile is replicated like any other.
     {
         AuthoritativeRace shooting;
+        // Rival classes vary with their names; fix one so the scenario does not depend on which
+        // names are drawn.
+        shooting.SetRivalCraftClass(CraftClass::Balanced);
         if (!shooting.Start({11}, 0, 3, true, 3, RaceMode::SingleRace))
         {
             std::cerr << "authoritative race did not start the AI weapons scenario\n";
@@ -160,6 +163,15 @@ int main()
         {
             if (racer.mPlayerId >= 1000000)
                 rivalIds.insert(racer.mPlayerId);
+        }
+        for (const RaceRacerSnapshot& racer : fullGrid.Snapshot().mRacers)
+        {
+            if (racer.mPlayerId >= 1000000
+                && racer.mCraftClass != RivalCraftClass(static_cast<int>(racer.mPlayerId - 1000000)))
+            {
+                std::cerr << "an AI rival is not driving the craft class that goes with its name\n";
+                return 1;
+            }
         }
         if (rivalIds.size() != 7 || *rivalIds.rbegin() >= 1000000 + RivalNamePoolSize())
         {

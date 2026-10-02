@@ -21,7 +21,10 @@ int main()
         || !championship.RecordResults({3, 2, 1}) || championship.AdvanceEvent()
         || !championship.Complete() || championship.PlayerPoints() != 6
         || championship.CompetitorPoints(1) != 6 || championship.CompetitorPoints(2) != 6
-        || championship.StandingForCompetitor(0) != 1 || championship.StandingForCompetitor(2) != 3)
+        // All three finish level on 6 points; the best finish in the last event (competitor 2 won
+        // it, the player was third) decides the order.
+        || championship.StandingForCompetitor(2) != 1 || championship.StandingForCompetitor(1) != 2
+        || championship.StandingForCompetitor(0) != 3)
     {
         std::cerr << "championship points or completion state was incorrect\n";
         return 1;
@@ -34,6 +37,27 @@ int main()
         || championship.EventRecorded() || championship.Complete())
     {
         std::cerr << "championship reset did not restore its initial state\n";
+        return 1;
+    }
+    // Competitors level on points are ordered by where they finished the latest event, so finishing
+    // last never ranks level with finishing fourth.
+    Championship eight(3);
+    if (!eight.RecordResults({8, 1, 2, 3, 4, 5, 6, 7}) || eight.StandingForCompetitor(1) != 1
+        || eight.StandingForCompetitor(2) != 2 || eight.StandingForCompetitor(3) != 3
+        || eight.StandingForCompetitor(4) != 4 || eight.StandingForCompetitor(7) != 7
+        || eight.StandingForCompetitor(0) != 8)
+    {
+        std::cerr << "tied competitors were not ordered by their latest finishing place\n";
+        return 1;
+    }
+    // After a second event, level competitors are ordered by that event's finishing places.
+    if (!eight.AdvanceEvent() || !eight.RecordResults({1, 8, 7, 6, 5, 4, 3, 2})
+        // The player and competitor 1 are level on 3 points; the player won this event, so leads.
+        || eight.StandingForCompetitor(0) != 1 || eight.StandingForCompetitor(1) != 2
+        // Competitors 2 and 7 are level on 2 points; 7 finished second, 2 finished seventh.
+        || eight.StandingForCompetitor(7) != 3 || eight.StandingForCompetitor(2) != 4)
+    {
+        std::cerr << "series standings after a second event were wrong\n";
         return 1;
     }
     return 0;

@@ -16,11 +16,21 @@ public:
     // detector then starts counting afresh.
     bool Update(double pX, double pY, double pSeconds);
 
+    // A second test, for a craft that is moving but going nowhere (bouncing between walls, circling
+    // a corner): pass its cumulative distance along the route. A stall is reported when that
+    // distance has not improved by kProgressDistance within kProgressWindowSeconds.
+    static constexpr double kProgressWindowSeconds = 8.0;
+    static constexpr double kProgressDistance = 12.0;
+    bool UpdateProgress(double pRouteDistance, double pSeconds);
+
 private:
     bool mStarted = false;
     double mAnchorX = 0.0;
     double mAnchorY = 0.0;
     double mStuckSeconds = 0.0;
+    bool mProgressStarted = false;
+    double mBestDistance = 0.0;
+    double mProgressSeconds = 0.0;
 };
 
 #endif

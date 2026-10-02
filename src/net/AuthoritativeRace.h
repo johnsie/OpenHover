@@ -17,6 +17,7 @@
 #include "RecoveryAssist.h"
 #include "RaisedSection.h"
 #include "RivalController.h"
+#include "RouteTracker.h"
 #include "StallDetector.h"
 #include "TrackDefinition.h"
 
@@ -73,6 +74,13 @@ public:
                RaceMode pRaceMode = RaceMode::SingleRace,
                const std::vector<TrackDefinition>* pTracks = nullptr);
     bool SubmitInput(const RaceInputCommand& pCommand);
+    // Gives every AI rival one craft class at the next Start, instead of the class tied to its
+    // name. Used to check how the classes compare on each track.
+    void SetRivalCraftClass(CraftClass pCraftClass)
+    {
+        mRivalCraftClass = pCraftClass;
+        mUseRivalCraftClassOverride = true;
+    }
     void Step();
     void Stop();
 
@@ -95,6 +103,7 @@ private:
         std::unique_ptr<RivalController> mRivalController;
         bool mRecoverRequested = false;
         StallDetector mStallDetector; // AI rivals only: recovers a rival that is stuck
+        RouteTracker mRouteTracker;   // AI rivals only: distance along the route, for the stall check
 
         bool mSteeringAssistEnabled = false;
         bool mBrakingAssistEnabled = false;
@@ -106,6 +115,8 @@ private:
     unsigned int mTick = 0;
     int mTargetLaps = 0;
     bool mWeaponsAllowed = false;
+    CraftClass mRivalCraftClass = CraftClass::Balanced;
+    bool mUseRivalCraftClassOverride = false;
     RaceMode mRaceMode = RaceMode::SingleRace;
     RaceStart mRaceStart;
     std::unique_ptr<Course> mCourse;

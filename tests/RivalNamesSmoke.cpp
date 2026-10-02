@@ -40,6 +40,14 @@ int main()
     expect(varied, "different seeds give different rival lineups");
     expect(everPicked.size() == 8, "every name is eventually used, including Cooper");
     expect(PickRivalNames(20, 5).size() == 8, "more rivals than names is limited to the pool");
+    int perClass[3] = {0, 0, 0};
+    for (int index = 0; index < RivalNamePoolSize(); ++index)
+        ++perClass[static_cast<int>(RivalCraftClass(index))];
+    expect(perClass[0] >= 2 && perClass[1] >= 2 && perClass[2] >= 2, "every craft class is driven by at least two names");
+    expect(RivalCraftClass(2) == CraftClass::Sprint && RivalCraftClass(1) == CraftClass::Control,
+           "Optimus Prime drives Sprint and Data drives Control");
+    expect(RivalCraftClass(-1) == CraftClass::Balanced && RivalCraftClass(99) == CraftClass::Balanced,
+           "an out-of-range name falls back to Balanced");
     expect(PickRivalNames(0, 5).empty() && PickRivalNames(-3, 5).empty(), "no rivals, no names");
     return ok ? 0 : 1;
 }

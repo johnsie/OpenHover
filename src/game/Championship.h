@@ -20,6 +20,8 @@ public:
     int CompetitorCount() const { return mCompetitorCount; }
     int CompetitorPoints(int pCompetitorIndex) const;
     int LastPointsAwarded(int pCompetitorIndex) const;
+    // Place in the series: most points first; competitors level on points are ordered by where
+    // they finished the latest event, and then by index.
     int StandingForCompetitor(int pCompetitorIndex) const;
     bool EventRecorded() const { return mEventRecorded; }
     bool Complete() const { return mComplete; }
@@ -31,6 +33,7 @@ private:
     int mCompetitorCount = 0;
     std::vector<int> mCompetitorPoints;
     std::vector<int> mLastPointsAwarded;
+    std::vector<int> mLastPositions; // finishing place of each competitor in the latest event
     bool mEventRecorded = false;
     bool mComplete = false;
 };
