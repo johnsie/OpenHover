@@ -68,6 +68,12 @@ struct LobbyRoomView
     bool mWeaponsAllowed = false;
 };
 
+struct LobbyPlayerView
+{
+    int mId = 0;
+    std::string mDisplayName;
+};
+
 struct OnlineRacerView
 {
     int mPlayerId = 0;
@@ -77,7 +83,7 @@ struct OnlineRacerView
     int mPosition = 0;
 };
 
-std::vector<std::string> gLobbyPlayers;
+std::vector<LobbyPlayerView> gLobbyPlayers;
 std::vector<LobbyRoomView> gLobbyRooms;
 std::vector<std::string> gLobbyChatMessages;
 std::string gLobbyChatInput;
@@ -126,7 +132,7 @@ void ParseLobbySnapshot(const std::string& pMessage)
     {
         const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
         if (fields.size() == 3 && fields[0] == "P")
-            gLobbyPlayers.push_back(fields[2]);
+            gLobbyPlayers.push_back({std::atoi(fields[1].c_str()), fields[2]});
         else if (fields.size() == 12 && fields[0] == "R")
         {
             LobbyRoomView room;
@@ -2139,7 +2145,7 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
                 break;
             glColor3f(playerIndex == 0 ? 0.95f : 0.76f, playerIndex == 0 ? 0.35f : 0.76f,
                       playerIndex == 0 ? 0.4f : 0.82f);
-            DrawPixelText(gLobbyPlayers[playerIndex].c_str(), margin + 26, playerTop, 2);
+            DrawPixelText(gLobbyPlayers[playerIndex].mDisplayName.c_str(), margin + 26, playerTop, 2);
         }
 
         const int previewLeft = detailLeft + 18;
@@ -3245,8 +3251,18 @@ int main(int pArgumentCount, char* pArguments[])
             else if (message.compare(0, 5, "CHAT ") == 0)
             {
                 const std::size_t textStart = message.find(' ', 5);
-                gLobbyChatMessages.push_back(textStart == std::string::npos
-                    ? message.substr(5) : message.substr(textStart + 1));
+                const int senderId = std::atoi(message.substr(5, textStart - 5).c_str());
+                const std::string text = textStart == std::string::npos ? "" : message.substr(textStart + 1);
+                std::string senderName = senderId == 0 ? "LOBBY" : "PILOT";
+                for (const LobbyPlayerView& player : gLobbyPlayers)
+                {
+                    if (player.mId == senderId)
+                    {
+                        senderName = player.mDisplayName;
+                        break;
+                    }
+                }
+                gLobbyChatMessages.push_back(senderName + " " + text);
                 if (gLobbyChatMessages.size() > 32)
                     gLobbyChatMessages.erase(gLobbyChatMessages.begin());
             }

@@ -129,8 +129,11 @@ int main(int pArgumentCount, char* pArguments[])
     TcpLobbyClient spectator;
     const bool hostConnected = ConnectAndHello(host, port, "Host", 1);
     const bool guestConnected = hostConnected && ConnectAndHello(guest, port, "Guest", 2);
-    const bool spectatorConnected = guestConnected && ConnectAndHello(spectator, port, "Spectator", 3);
-    const bool roomCreated = spectatorConnected
+    const bool guestAnnounced = guestConnected && TickUntil(host, "CHAT 0 Guest JOINED LOBBY");
+    const bool namedChatDelivered = guestAnnounced && host.SendCommand("CHAT Welcome")
+        && TickUntil(host, "CHAT 1 Welcome") && TickUntil(guest, "CHAT 1 Welcome");
+    const bool spectatorConnected = namedChatDelivered && ConnectAndHello(spectator, port, "Spectator", 3);
+    const bool roomCreated = namedChatDelivered && spectatorConnected
         && host.SendCommand("CREATE Smoke race|0|0|3|2|0|1")
         && TickUntil(host, "ROOM 1");
     if (roomCreated)
@@ -151,13 +154,14 @@ int main(int pArgumentCount, char* pArguments[])
             || ContainsPrefix(spectator.TakeMessages(), "RACE 1|");
         usleep(10000);
     }
+    spectator.Disconnect();
+    const bool spectatorDepartureAnnounced = TickUntil(host, "CHAT 0 Spectator LEFT LOBBY");
     host.Disconnect();
     guest.Disconnect();
-    spectator.Disconnect();
     kill(serverProcess, SIGTERM);
     int serverStatus = 0;
     waitpid(serverProcess, &serverStatus, 0);
-    if (!raceHudReceived || spectatorReceivedRace)
+    if (!raceHudReceived || spectatorReceivedRace || !spectatorDepartureAnnounced)
     {
         std::cerr << "tcp lobby server did not isolate authoritative race snapshots\n";
         return 1;

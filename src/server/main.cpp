@@ -102,6 +102,12 @@ void BroadcastLobbySnapshot(const Lobby& pLobby, const std::vector<ClientConnect
         SendLine(client, snapshot.str());
 }
 
+void BroadcastLobbyNotice(const std::string& pText, const std::vector<ClientConnection>& pClients)
+{
+    for (const ClientConnection& client : pClients)
+        SendLine(client, "CHAT 0 " + pText);
+}
+
 void BroadcastRaceSnapshot(LobbyRoomId pRoomId, const AuthoritativeRace& pRace,
                            const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
 {
@@ -165,9 +171,23 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
 {
     if (pClients[pIndex].mPlayerId != 0)
     {
+        std::string displayName;
+        for (const LobbyPlayer& player : pLobby.Players())
+        {
+            if (player.mId == pClients[pIndex].mPlayerId)
+            {
+                displayName = player.mDisplayName;
+                break;
+            }
+        }
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClients[pIndex].mPlayerId);
         pLobby.Disconnect(pClients[pIndex].mPlayerId);
         StopRace(pLobby, pRaces, roomId);
+        close(pClients[pIndex].mSocket);
+        pClients.erase(pClients.begin() + pIndex);
+        if (!displayName.empty())
+            BroadcastLobbyNotice(displayName + " LEFT LOBBY", pClients);
+        return;
     }
     close(pClients[pIndex].mSocket);
     pClients.erase(pClients.begin() + pIndex);
@@ -188,6 +208,7 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         {
             SendLine(pClient, "WELCOME " + std::to_string(pClient.mPlayerId));
             BroadcastLobbySnapshot(pLobby, pClients);
+            BroadcastLobbyNotice(argument + " JOINED LOBBY", pClients);
         }
         else
             SendLine(pClient, "ERROR name unavailable");
