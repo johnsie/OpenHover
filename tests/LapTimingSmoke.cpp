@@ -58,7 +58,8 @@ int main()
     progress.mCompletedLaps = 2;
     timer.Update(progress);
     if (std::fabs(timer.Timing().mLastSeconds - 17.0) > 0.0001
-        || std::fabs(timer.Timing().mBestSeconds - 17.0) > 0.0001)
+        || std::fabs(timer.Timing().mBestSeconds - 17.0) > 0.0001
+        || std::fabs(timer.Timing().mLastImprovementSeconds - 2.0) > 0.0001)
     {
         std::cerr << "best lap was not updated\n";
         return 1;

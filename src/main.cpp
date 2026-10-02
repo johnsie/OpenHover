@@ -9,16 +9,26 @@
 #include "CraftClass.h"
 #include "FixedStepClock.h"
 #include "Hovercraft.h"
+#include "GhostLibrary.h"
 #include "InputRecording.h"
 #include "LapTiming.h"
+#include "Lobby.h"
 #include "Missile.h"
+#include "CameraRig.h"
+#include "KeyBindings.h"
+#include "PadBindings.h"
+#include "PadMenuInput.h"
+#include "PracticeGuide.h"
+#include "Protocol.h"
 #include "Race.h"
 #include "RaceMode.h"
 #include "RacePosition.h"
 #include "RaceStart.h"
 #include "RacerCollision.h"
 #include "RecoveryAssist.h"
+#include "ReconnectPolicy.h"
 #include "RivalController.h"
+#include "RivalNames.h"
 #include "RouteGuidance.h"
 #include "SteeringAssist.h"
 #include "TrackDefinition.h"
@@ -30,6 +40,7 @@
 #include <cstring>
 #include <cstdio>
 #include <sstream>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -66,12 +77,17 @@ struct LobbyRoomView
     int mLapCount = 0;
     int mRivalCount = 0;
     bool mWeaponsAllowed = false;
+    bool mPrivate = false;
+    int mReadyPlayerCount = 0;
 };
 
 struct LobbyPlayerView
 {
     int mId = 0;
     std::string mDisplayName;
+    int mRoomId = 0;
+    bool mHost = false;
+    bool mReady = false;
 };
 
 struct OnlineRacerView
@@ -100,8 +116,13 @@ bool gLobbyChatInputFocused = false;
 std::vector<std::string> gOnlineChatMessages;
 std::string gOnlineChatInput;
 bool gOnlineChatInputFocused = false;
+LobbyMuteList gLobbyMuteList;
 std::string gPlayerDisplayName;
 std::string gLobbyStatus = "CONNECTING TO SERVER";
+ReconnectPolicy gReconnectPolicy;
+std::string gLobbyServerVersion;
+int gLobbyServerProtocol = 0;
+int gLobbyServerContent = 0;
 int gLobbySelectedRoom = -1;
 int gLobbyPlayerId = 0;
 int gLobbyJoinedRoomId = 0;
@@ -113,6 +134,9 @@ int gHostLapCount = 3;
 int gHostPlayerCapacity = 8;
 int gHostRivalCount = 0;
 bool gHostWeaponsAllowed = true;
+bool gHostPrivateRoom = false;
+std::string gHostedRoomCode;
+bool gLobbyReady = false;
 bool gHostCreatePending = false;
 bool gDisplayNameSetupConnectsToLobby = false;
 int gOnlineRaceRoomId = 0;
@@ -136,6 +160,9 @@ bool gOnlineBoostActive = false;
 bool gOnlineSpinOutActive = false;
 bool gOnlineBoostCue = false;
 bool gOnlineImpactCue = false;
+Uint32 gOnlineCheckpointVisualUntil = 0;
+Uint32 gOnlineBoostVisualUntil = 0;
+Uint32 gOnlineImpactVisualUntil = 0;
 bool gOnlineRaceFinished = false;
 int gOnlineChampionshipEvent = 0;
 int gOnlineChampionshipEventCount = 0;
@@ -164,9 +191,12 @@ void ParseLobbySnapshot(const std::string& pMessage)
     for (std::size_t index = 1; index < entries.size(); ++index)
     {
         const std::vector<std::string> fields = SplitLobbyField(entries[index], ',');
-        if (fields.size() == 3 && fields[0] == "P")
-            gLobbyPlayers.push_back({std::atoi(fields[1].c_str()), fields[2]});
-        else if (fields.size() == 12 && fields[0] == "R")
+        if (fields.size() == 6 && fields[0] == "P")
+            gLobbyPlayers.push_back({std::atoi(fields[1].c_str()), fields[2],
+                                     std::atoi(fields[3].c_str()),
+                                     std::atoi(fields[4].c_str()) != 0,
+                                     std::atoi(fields[5].c_str()) != 0});
+        else if (fields.size() == 14 && fields[0] == "R")
         {
             LobbyRoomView room;
             room.mId = std::atoi(fields[1].c_str());
@@ -180,6 +210,8 @@ void ParseLobbySnapshot(const std::string& pMessage)
             room.mLapCount = std::atoi(fields[9].c_str());
             room.mRivalCount = std::atoi(fields[10].c_str());
             room.mWeaponsAllowed = std::atoi(fields[11].c_str()) != 0;
+            room.mPrivate = std::atoi(fields[12].c_str()) != 0;
+            room.mReadyPlayerCount = std::atoi(fields[13].c_str());
             gLobbyRooms.push_back(room);
         }
     }
@@ -402,24 +434,46 @@ const char* RivalDifficultySetupLabel(RivalDifficulty pRivalDifficulty)
     return "STANDARD BALANCED";
 }
 
+bool LocalSetupOptionVisible(RaceMode pRaceMode, int pOption)
+{
+    if (pOption == 3)
+        return RaceModeHasFinish(pRaceMode);
+    if (pOption == 4 || pOption == 5)
+        return RaceModeUsesRivals(pRaceMode);
+    return pOption >= 0 && pOption < 10;
+}
+
+int LocalSetupOptionRow(RaceMode pRaceMode, int pOption)
+{
+    if (!LocalSetupOptionVisible(pRaceMode, pOption))
+        return -1;
+    int row = 0;
+    for (int option = 0; option < pOption; ++option)
+    {
+        if (LocalSetupOptionVisible(pRaceMode, option))
+            ++row;
+    }
+    return row;
+}
+
+int NextLocalSetupOption(RaceMode pRaceMode, int pOption, int pDirection)
+{
+    do
+        pOption = (pOption + pDirection + 10) % 10;
+    while (!LocalSetupOptionVisible(pRaceMode, pOption));
+    return pOption;
+}
+
 bool IsPointInRect(int pX, int pY, int pLeft, int pTop, int pWidth, int pHeight)
 {
     return pX >= pLeft && pX < pLeft + pWidth && pY >= pTop && pY < pTop + pHeight;
-}
-
-bool IsLobbyNameCharacter(char pCharacter)
-{
-    return (pCharacter >= 'A' && pCharacter <= 'Z')
-        || (pCharacter >= 'a' && pCharacter <= 'z')
-        || (pCharacter >= '0' && pCharacter <= '9')
-        || pCharacter == '_' || pCharacter == '-';
 }
 
 void AppendLobbyNameText(std::string& pName, const char* pText)
 {
     for (const char* character = pText; *character != '\0' && pName.size() < 24; ++character)
     {
-        if (IsLobbyNameCharacter(*character))
+        if (IsValidLobbyNameCharacter(*character))
         {
             const char uppercaseCharacter = *character >= 'a' && *character <= 'z'
                 ? static_cast<char>(*character - 'a' + 'A') : *character;
@@ -574,25 +628,26 @@ bool ShouldJumpRaisedSection(const HovercraftState& pState,
     return false;
 }
 
-void SetPerspective(double pAspect, double pSpeed)
+void SetPerspective(double pAspect, double pSpeed, double pZoomScale = 1.0)
 {
     const double nearPlane = 0.2;
     const double farPlane = 400.0;
     const double speedFraction = std::fmin(1.0, std::fabs(pSpeed) / 55.0);
-    const double fieldOfView = 54.0 + speedFraction * 7.0;
+    const double fieldOfView = 54.0 + speedFraction * 7.0 * pZoomScale;
     const double top = nearPlane * std::tan(fieldOfView * kPi / 360.0);
     glFrustum(-top * pAspect, top * pAspect, -top, top, nearPlane, farPlane);
 }
 
-void SetChaseCamera(const HovercraftState& pState, double pDistance)
+void SetChaseCamera(const HovercraftState& pState, double pDistance, double pHeading,
+                    double pRise)
 {
-    const double forwardX = std::cos(pState.mHeading);
-    const double forwardZ = std::sin(pState.mHeading);
+    const double forwardX = std::cos(pHeading);
+    const double forwardZ = std::sin(pHeading);
     const double eyeX = pState.mX - forwardX * pDistance;
-    const double eyeY = 2.3 + pDistance * 0.09;
+    const double eyeY = 2.3 + pDistance * 0.09 + pRise;
     const double eyeZ = pState.mY - forwardZ * pDistance;
     const double targetX = pState.mX + forwardX * pDistance * 0.8;
-    const double targetY = 1.55;
+    const double targetY = 1.55 + pRise * 0.8;
     const double targetZ = pState.mY + forwardZ * pDistance * 0.8;
     double viewX = targetX - eyeX;
     double viewY = targetY - eyeY;
@@ -805,6 +860,8 @@ void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
     glEnd();
 }
 
+CameraMotion gCameraMotion = CameraMotion::Standard;
+
 void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWidth,
                         float pRoadRed, float pRoadGreen, float pRoadBlue,
                         float pWallRed, float pWallGreen, float pWallBlue, GLuint pRoadTexture,
@@ -983,8 +1040,21 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
         glVertex3d(edge.mRightX, wallHeight, edge.mRightZ);
     glEnd();
 
-    glColor3f(0.22f, 0.9f, 1.0f);
-    glBegin(GL_TRIANGLES);
+    // Large bright chevrons on both walls point in the driving direction, so a player who has lost
+    // their bearings can always tell which way the route goes. They sit just in front of the wall.
+    const GLboolean lightingWasOn = glIsEnabled(GL_LIGHTING);
+    if (lightingWasOn)
+        glDisable(GL_LIGHTING);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-2.0f, -2.0f);
+    // Flash between two bright colours two or three times a second. Reduced camera motion keeps
+    // them steady for players who are sensitive to flicker.
+    const bool flashAlternate = gCameraMotion != CameraMotion::Reduced && (SDL_GetTicks() / 250) % 2 == 1;
+    if (flashAlternate)
+        glColor3f(1.0f, 0.1f, 0.85f);
+    else
+        glColor3f(1.0f, 0.86f, 0.1f);
+    glBegin(GL_QUADS);
     for (int side = 0; side < 2; ++side)
     {
         for (int index = 0; index < static_cast<int>(edges.size()); ++index)
@@ -998,26 +1068,40 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
             const double segmentX = endX - startX;
             const double segmentZ = endZ - startZ;
             const double segmentLength = std::sqrt(segmentX * segmentX + segmentZ * segmentZ);
-            if (segmentLength == 0.0)
+            if (segmentLength < 8.0)
                 continue;
             const double forwardX = segmentX / segmentLength;
             const double forwardZ = segmentZ / segmentLength;
             const double acrossX = start.mLeftX - start.mRightX;
             const double acrossZ = start.mLeftZ - start.mRightZ;
             const double acrossLength = std::sqrt(acrossX * acrossX + acrossZ * acrossZ);
-            const double outwardX = (side == 0 ? acrossX : -acrossX) / acrossLength * 0.02;
-            const double outwardZ = (side == 0 ? acrossZ : -acrossZ) / acrossLength * 0.02;
-            for (double distance = 5.0; distance < segmentLength - 1.5; distance += 9.0)
+            // Toward the road centre, away from the wall face.
+            const double inwardX = (side == 0 ? -acrossX : acrossX) / acrossLength * 0.06;
+            const double inwardZ = (side == 0 ? -acrossZ : acrossZ) / acrossLength * 0.06;
+            const auto point = [&](double pCentreX, double pCentreZ, double pAlong, double pHeight)
             {
-                const double centerX = startX + forwardX * distance + outwardX;
-                const double centerZ = startZ + forwardZ * distance + outwardZ;
-                glVertex3d(centerX + forwardX * 1.25, 1.15, centerZ + forwardZ * 1.25);
-                glVertex3d(centerX - forwardX * 1.0, 0.7, centerZ - forwardZ * 1.0);
-                glVertex3d(centerX - forwardX * 1.0, 1.6, centerZ - forwardZ * 1.0);
+                glVertex3d(pCentreX + forwardX * pAlong + inwardX, pHeight,
+                           pCentreZ + forwardZ * pAlong + inwardZ);
+            };
+            for (double distance = 6.0; distance < segmentLength - 4.0; distance += 14.0)
+            {
+                const double centreX = startX + forwardX * distance;
+                const double centreZ = startZ + forwardZ * distance;
+                point(centreX, centreZ, -1.4, 4.9);
+                point(centreX, centreZ, -0.3, 4.9);
+                point(centreX, centreZ, 1.8, 3.0);
+                point(centreX, centreZ, 0.7, 3.0);
+                point(centreX, centreZ, 0.7, 3.0);
+                point(centreX, centreZ, 1.8, 3.0);
+                point(centreX, centreZ, -0.3, 1.1);
+                point(centreX, centreZ, -1.4, 1.1);
             }
         }
     }
     glEnd();
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    if (lightingWasOn)
+        glEnable(GL_LIGHTING);
 }
 
 void DrawCityBuilding(double pX, double pZ, double pWidth, double pDepth, double pHeight,
@@ -1096,27 +1180,108 @@ void DrawIndustrialBeacon(double pX, double pZ, double pHeight)
     glEnd();
 }
 
+// Distance from a point to the closed route centreline.
+double DistanceToRoute(const std::vector<RaceGate>& pWaypoints, double pX, double pY)
+{
+    double best = 1e18;
+    for (std::size_t index = 0; index < pWaypoints.size(); ++index)
+    {
+        const RaceGate& start = pWaypoints[index];
+        const RaceGate& end = pWaypoints[(index + 1) % pWaypoints.size()];
+        const double segmentX = end.mX - start.mX;
+        const double segmentY = end.mY - start.mY;
+        const double lengthSquared = segmentX * segmentX + segmentY * segmentY;
+        double fraction = lengthSquared > 0.0
+            ? ((pX - start.mX) * segmentX + (pY - start.mY) * segmentY) / lengthSquared : 0.0;
+        fraction = std::fmax(0.0, std::fmin(1.0, fraction));
+        best = std::fmin(best, std::hypot(pX - (start.mX + segmentX * fraction),
+                                          pY - (start.mY + segmentY * fraction)));
+    }
+    return best;
+}
+
 void DrawTrackEnvironment(const TrackDefinition& pTrack)
 {
+    if (pTrack.mWaypoints.empty())
+        return;
+    double minimumX = pTrack.mWaypoints.front().mX;
+    double maximumX = minimumX;
+    double minimumY = pTrack.mWaypoints.front().mY;
+    double maximumY = minimumY;
+    for (const RaceGate& waypoint : pTrack.mWaypoints)
+    {
+        minimumX = std::fmin(minimumX, waypoint.mX);
+        maximumX = std::fmax(maximumX, waypoint.mX);
+        minimumY = std::fmin(minimumY, waypoint.mY);
+        maximumY = std::fmax(maximumY, waypoint.mY);
+    }
+    const double centreX = (minimumX + maximumX) * 0.5;
+    const double centreY = (minimumY + maximumY) * 0.5;
+    const double halfX = std::fmax(1.0, (maximumX - minimumX) * 0.5);
+    const double halfY = std::fmax(1.0, (maximumY - minimumY) * 0.5);
+    // Scenery grows with the course so it stays a landmark rather than a speck.
+    const double propScale = std::fmax(1.0, std::fmin(2.5, std::fmax(halfX, halfY) / 150.0));
+    // Places a prop relative to the course bounds, then pushes it outward from the course centre
+    // until it is clear of the road, so scenery never stands on or beside the route.
+    const auto place = [&](double pFractionX, double pFractionY, double pFootprintRadius,
+                           double& pX, double& pY)
+    {
+        pX = centreX + halfX * pFractionX;
+        pY = centreY + halfY * pFractionY;
+        double directionX = pX - centreX;
+        double directionY = pY - centreY;
+        const double directionLength = std::fmax(1.0, std::hypot(directionX, directionY));
+        directionX /= directionLength;
+        directionY /= directionLength;
+        const double required = pFootprintRadius + pTrack.mRoadHalfWidth + 30.0;
+        for (int attempt = 0; attempt < 200 && DistanceToRoute(pTrack.mWaypoints, pX, pY) < required;
+             ++attempt)
+        {
+            pX += directionX * 10.0;
+            pY += directionY * 10.0;
+        }
+    };
+    double x = 0.0;
+    double y = 0.0;
     if (pTrack.mId == "harbor-loop")
     {
-        DrawCityBuilding(-220.0, 170.0, 24.0, 22.0, 42.0, 0.22f, 0.3f, 0.33f);
-        DrawCityBuilding(-185.0, 220.0, 16.0, 18.0, 27.0, 0.28f, 0.36f, 0.38f);
-        DrawCityBuilding(205.0, 160.0, 20.0, 24.0, 35.0, 0.18f, 0.28f, 0.32f);
-        DrawCityBuilding(240.0, 215.0, 28.0, 20.0, 48.0, 0.24f, 0.34f, 0.36f);
+        const double sizes[4][3] = {{24.0, 22.0, 42.0}, {16.0, 18.0, 27.0},
+                                    {20.0, 24.0, 35.0}, {28.0, 20.0, 48.0}};
+        const double fractions[4][2] = {{-1.3, 0.55}, {-1.2, 0.95}, {1.3, 0.5}, {1.35, 0.9}};
+        const float colours[4][3] = {{0.22f, 0.3f, 0.33f}, {0.28f, 0.36f, 0.38f},
+                                     {0.18f, 0.28f, 0.32f}, {0.24f, 0.34f, 0.36f}};
+        for (int index = 0; index < 4; ++index)
+        {
+            const double width = sizes[index][0] * propScale;
+            const double depth = sizes[index][1] * propScale;
+            place(fractions[index][0], fractions[index][1], std::hypot(width, depth) * 0.5, x, y);
+            DrawCityBuilding(x, y, width, depth, sizes[index][2] * propScale, colours[index][0],
+                             colours[index][1], colours[index][2]);
+        }
     }
     else if (pTrack.mId == "glass-switchback")
     {
-        DrawMountain(-210.0, 250.0, 45.0, 48.0, 0.22f, 0.31f, 0.28f);
-        DrawMountain(235.0, 280.0, 58.0, 62.0, 0.3f, 0.38f, 0.32f);
-        DrawMountain(45.0, 360.0, 68.0, 70.0, 0.18f, 0.27f, 0.26f);
+        const double sizes[3][2] = {{45.0, 48.0}, {58.0, 62.0}, {68.0, 70.0}};
+        const double fractions[3][2] = {{-1.4, 0.6}, {1.4, 0.8}, {0.0, 1.5}};
+        const float colours[3][3] = {{0.22f, 0.31f, 0.28f}, {0.3f, 0.38f, 0.32f},
+                                     {0.18f, 0.27f, 0.26f}};
+        for (int index = 0; index < 3; ++index)
+        {
+            const double radius = sizes[index][0] * propScale;
+            place(fractions[index][0], fractions[index][1], radius * 1.5, x, y);
+            DrawMountain(x, y, radius, sizes[index][1] * propScale, colours[index][0],
+                         colours[index][1], colours[index][2]);
+        }
     }
     else
     {
-        DrawIndustrialBeacon(-185.0, 30.0, 32.0);
-        DrawIndustrialBeacon(225.0, 42.0, 46.0);
-        DrawIndustrialBeacon(190.0, 205.0, 38.0);
-        DrawIndustrialBeacon(-145.0, 190.0, 42.0);
+        const double heights[4] = {32.0, 46.0, 38.0, 42.0};
+        const double fractions[4][2] = {{-1.3, -0.5}, {1.35, -0.4}, {1.25, 0.8}, {-1.25, 0.6}};
+        for (int index = 0; index < 4; ++index)
+        {
+            place(fractions[index][0], fractions[index][1], 4.0 * propScale, x, y);
+            DrawIndustrialBeacon(x, y, heights[index] * propScale);
+        }
     }
 }
 
@@ -1978,13 +2143,30 @@ void DrawSetupOverlay(int pWidth, int pHeight)
     DrawPixelText("SHIFT ACCEL  CTRL FIRE", 24, 138, 2);
 }
 
-void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
-                       bool pChampionship, const char* pChampionshipPoints,
-                       double pPlayerElapsedSeconds, const LapTiming& pLapTiming,
-                       int pSelection, int pWidth, int pHeight)
+std::string gRaceWinnerName;
+bool gNewGhostBest = false;
+double gGhostSecondsBeforeRace = 0.0; // best ghost time when this race began, 0 if none
+GhostLibrary gGhostLibrary;
+// Name pool index for each local rival slot, redrawn at every race start so no two rivals share
+// a name.
+std::vector<int> gRivalNameSlots = PickRivalNames(7, 1);
+
+std::string LocalRivalName(int pRivalIndex)
 {
-    const int panelWidth = 420;
-    const int panelHeight = pChampionship ? 310 : 268;
+    if (pRivalIndex >= 0 && pRivalIndex < static_cast<int>(gRivalNameSlots.size()))
+        return RivalName(gRivalNameSlots[pRivalIndex]);
+    return RivalName(pRivalIndex);
+}
+
+void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
+                       const std::vector<int>& pCompetitorPositions,
+                       bool pChampionship, bool pChampionshipComplete, bool pChampionshipFinalEvent,
+                       const char* pChampionshipPoints,
+                       double pPlayerElapsedSeconds, const LapTiming& pLapTiming,
+                       CraftClass pCraftClass, int pSelection, int pWidth, int pHeight)
+{
+    const int panelWidth = 620;
+    const int panelHeight = pChampionship ? 350 : 352;
     const int left = (pWidth - panelWidth) / 2;
     const int top = (pHeight - panelHeight) / 2 - 10;
     glColor3f(0.02f, 0.05f, 0.08f);
@@ -2002,10 +2184,18 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
     glVertex2i(left + panelWidth, top + panelHeight);
     glVertex2i(left, top + panelHeight);
     glEnd();
-    if (pWinner == 1)
+    if (pChampionshipComplete)
+        DrawPixelText("SERIES COMPLETE", left + 42, top + 18, 4);
+    else if (pWinner == 1)
         DrawPixelText("FINISH", left + 138, top + 18, 5);
     else
-        DrawPixelText("RIVAL FINISH", left + 78, top + 18, 4);
+    {
+        const std::string heading = gRaceWinnerName.empty() ? std::string("RIVAL FINISH")
+                                                            : gRaceWinnerName + " WINS";
+        const int headingScale = heading.size() > 14 ? 3 : 4;
+        DrawPixelText(heading.c_str(), left + 210 - PixelTextWidth(heading.c_str(), headingScale) / 2,
+                      top + 18, headingScale);
+    }
     char placement[32];
     std::snprintf(placement, sizeof(placement), "PLACE %d OF %d", pPlayerPosition, pCompetitorCount);
     glColor3f(0.82f, 0.9f, 0.92f);
@@ -2022,15 +2212,78 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
     std::snprintf(bestLap, sizeof(bestLap), "BEST %d M %d S", bestLapSeconds / 60, bestLapSeconds % 60);
     DrawPixelText(lastLap, left + 110, top + 132, 2);
     DrawPixelText(bestLap, left + 110, top + 154, 2);
+    char improvement[40];
+    if (pLapTiming.mLastImprovementSeconds > 0.0)
+        std::snprintf(improvement, sizeof(improvement), "LAP IMPROVED BY %.2f S",
+                      pLapTiming.mLastImprovementSeconds);
+    else
+        std::snprintf(improvement, sizeof(improvement), "NO NEW LAP BEST");
+    char craft[40];
+    std::snprintf(craft, sizeof(craft), "CRAFT %s", CraftClassName(pCraftClass));
+    glColor3f(pLapTiming.mLastImprovementSeconds > 0.0 ? 0.18f : 0.72f,
+              pLapTiming.mLastImprovementSeconds > 0.0 ? 0.96f : 0.82f,
+              pLapTiming.mLastImprovementSeconds > 0.0 ? 0.4f : 0.84f);
+    DrawPixelText(improvement, left + 110, top + 178, 2);
+    glColor3f(0.82f, 0.9f, 0.92f);
+    DrawPixelText(craft, left + 110, top + 200, 2);
+    if (!pChampionship && (gNewGhostBest || gGhostSecondsBeforeRace > 0.0))
+    {
+        if (gNewGhostBest)
+        {
+            glColor3f(0.18f, 0.96f, 0.4f);
+            DrawPixelText("NEW GHOST SAVED", left + 110, top + 224, 2);
+        }
+        if (gGhostSecondsBeforeRace > 0.0)
+        {
+            const int ghostSeconds = static_cast<int>(gGhostSecondsBeforeRace + 0.5);
+            char ghostLine[40];
+            std::snprintf(ghostLine, sizeof(ghostLine), "%s %d M %d S",
+                          gNewGhostBest ? "GHOST WAS" : "GHOST BEST", ghostSeconds / 60,
+                          ghostSeconds % 60);
+            glColor3f(0.82f, 0.9f, 0.92f);
+            DrawPixelText(ghostLine, left + 110, top + 248, 2);
+        }
+    }
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText("FINISHING ORDER", left + 412, top + 28, 2);
+    glColor3f(0.18f, 0.36f, 0.4f);
+    glBegin(GL_LINES);
+    glVertex2i(left + 398, top + 18);
+    glVertex2i(left + 398, top + 280);
+    glEnd();
+    const int visibleCompetitors = std::min(8, static_cast<int>(pCompetitorPositions.size()));
+    for (int place = 1; place <= visibleCompetitors; ++place)
+    {
+        int competitor = -1;
+        for (int index = 0; index < static_cast<int>(pCompetitorPositions.size()); ++index)
+        {
+            if (pCompetitorPositions[index] == place)
+            {
+                competitor = index;
+                break;
+            }
+        }
+        if (competitor < 0)
+            continue;
+        char orderEntry[48];
+        if (competitor == 0)
+            std::snprintf(orderEntry, sizeof(orderEntry), "%d  YOU", place);
+        else
+            std::snprintf(orderEntry, sizeof(orderEntry), "%d  %s", place,
+                          LocalRivalName(competitor - 1).c_str());
+        glColor3f(competitor == 0 ? 1.0f : 0.82f, competitor == 0 ? 0.78f : 0.9f,
+                  competitor == 0 ? 0.12f : 0.92f);
+        DrawPixelText(orderEntry, left + 414, top + 66 + (place - 1) * 27, 2);
+    }
     if (pChampionship)
     {
         glColor3f(0.2f, 0.9f, 1.0f);
-        DrawPixelText("SERIES POINTS", left + 122, top + 180, 3);
+        DrawPixelText("SERIES UPDATE", left + 116, top + 224, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText(pChampionshipPoints, left + 42, top + 210, 2);
+        DrawPixelText(pChampionshipPoints, left + 42, top + 254, 2);
     }
-    const int actionsTop = top + (pChampionship ? 248 : 198);
-    for (int action = 0; action < 2; ++action)
+    const int actionsTop = top + 294 - (pChampionship ? 0 : 2);
+    for (int action = 0; action < 3; ++action)
     {
         const int actionLeft = left + 24 + action * 194;
         const bool selected = action == pSelection;
@@ -2045,16 +2298,33 @@ void DrawResultOverlay(int pWinner, int pPlayerPosition, int pCompetitorCount,
     }
     glColor3f(pSelection == 0 ? 1.0f : 0.82f, pSelection == 0 ? 0.82f : 0.9f,
               pSelection == 0 ? 0.22f : 0.92f);
-    DrawPixelText(pChampionship ? "NEXT EVENT" : "RESTART", left + 42, actionsTop + 12, 2);
+    const char* primaryAction = pChampionshipComplete ? "NEW SERIES"
+        : pChampionshipFinalEvent ? "FINAL RESULTS" : pChampionship ? "NEXT EVENT" : "RESTART";
+    DrawPixelText(primaryAction, left + 42, actionsTop + 12, 2);
     glColor3f(pSelection == 1 ? 1.0f : 0.82f, pSelection == 1 ? 0.82f : 0.9f,
               pSelection == 1 ? 0.22f : 0.92f);
-    DrawPixelText("MAIN MENU", left + 242, actionsTop + 12, 2);
+    DrawPixelText("SETUP", left + 270, actionsTop + 12, 2);
+    glColor3f(pSelection == 2 ? 1.0f : 0.82f, pSelection == 2 ? 0.82f : 0.9f,
+              pSelection == 2 ? 0.22f : 0.92f);
+    DrawPixelText("MAIN MENU", left + 436, actionsTop + 12, 2);
 }
 
-void DrawPauseOverlay(int pSelection, int pWidth, int pHeight)
+KeyBindings gKeyBindings;
+PadBindings gPadBindings;
+constexpr int kKeyRemapRows = static_cast<int>(BindAction::Count);
+constexpr int kRemapRows = kKeyRemapRows + static_cast<int>(PadAction::Count);
+CameraRig gCameraRig;
+bool gRemapOpen = false;
+bool gRemapCapturing = false;
+int gRemapSelection = 0;
+
+void DrawPauseOverlay(int pSelection, bool pControllerConnected, bool pSteeringAssist,
+                      bool pBrakingAssist, int pCameraDistanceSetting, int pMenuVolume,
+                      int pRaceVolume,
+                      int pWidth, int pHeight)
 {
-    const int panelWidth = 340;
-    const int panelHeight = 236;
+    const int panelWidth = 760;
+    const int panelHeight = 536;
     const int left = (pWidth - panelWidth) / 2;
     const int top = (pHeight - panelHeight) / 2;
     glColor4f(0.01f, 0.025f, 0.04f, 0.9f);
@@ -2065,24 +2335,123 @@ void DrawPauseOverlay(int pSelection, int pWidth, int pHeight)
     glVertex2i(left, top + panelHeight);
     glEnd();
     glColor3f(0.2f, 0.9f, 1.0f);
-    DrawPixelText("PAUSED", left + 104, top + 24, 4);
-    const char* actions[] = {"RESUME", "MAIN MENU", "EXIT OPENHOVER"};
-    for (int action = 0; action < 3; ++action)
+    DrawPixelText("PAUSED", left + 104, top + 22, 4);
+    const char* cameraDistances[] = {"NEAR", "MEDIUM", "FAR"};
+    const char* actions[] = {"RESUME", "STEERING ASSIST", "BRAKING ASSIST",
+                             "CAMERA DISTANCE", "CAMERA MOTION", "MENU VOLUME", "RACE VOLUME",
+                             "KEY BINDINGS", "MAIN MENU", "EXIT OPENHOVER"};
+    for (int action = 0; action < 10; ++action)
     {
-        const int actionTop = top + 82 + action * 44;
+        const int actionTop = top + 70 + action * 44;
         const bool selected = action == pSelection;
         glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                   selected ? 0.62f : 0.14f);
         glBegin(GL_QUADS);
         glVertex2i(left + 24, actionTop);
-        glVertex2i(left + panelWidth - 24, actionTop);
-        glVertex2i(left + panelWidth - 24, actionTop + 34);
+        glVertex2i(left + 350, actionTop);
+        glVertex2i(left + 350, actionTop + 34);
         glVertex2i(left + 24, actionTop + 34);
         glEnd();
         glColor3f(selected ? 1.0f : 0.82f, selected ? 0.82f : 0.9f,
                   selected ? 0.22f : 0.92f);
-        DrawPixelText(actions[action], left + 66, actionTop + 10, 2);
+        DrawPixelText(actions[action], left + 42, actionTop + 10, 2);
+        if (action == 1)
+            DrawPixelText(pSteeringAssist ? "ON" : "OFF", left + 292, actionTop + 10, 2);
+        else if (action == 2)
+            DrawPixelText(pBrakingAssist ? "ON" : "OFF", left + 292, actionTop + 10, 2);
+        else if (action == 3)
+            DrawPixelText(cameraDistances[pCameraDistanceSetting], left + 262, actionTop + 10, 2);
+        else if (action == 4)
+            DrawPixelText(CameraMotionName(gCameraMotion), left + 238, actionTop + 10, 2);
+        else if (action == 5 || action == 6)
+        {
+            char volume[8];
+            std::snprintf(volume, sizeof(volume), "%d", action == 5 ? pMenuVolume : pRaceVolume);
+            DrawPixelText(volume, left + 292, actionTop + 10, 2);
+        }
     }
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText(gRemapOpen ? "KEY BINDINGS" : "CONTROLS", left + 486, top + 24, 3);
+    glColor3f(0.82f, 0.9f, 0.92f);
+    if (gRemapOpen)
+    {
+        for (int i = 0; i < kRemapRows; ++i)
+        {
+            const bool selected = i == gRemapSelection;
+            const int rowTop = top + 74 + i * 34;
+            if (selected)
+            {
+                glColor3f(0.12f, 0.52f, 0.62f);
+                glBegin(GL_QUADS);
+                glVertex2i(left + 390, rowTop - 6);
+                glVertex2i(left + 736, rowTop - 6);
+                glVertex2i(left + 736, rowTop + 24);
+                glVertex2i(left + 390, rowTop + 24);
+                glEnd();
+            }
+            glColor3f(selected ? 1.0f : 0.82f, selected ? 0.82f : 0.9f, selected ? 0.22f : 0.92f);
+            const bool padRow = i >= kKeyRemapRows;
+            DrawPixelText(padRow ? PadBindings::ActionName(static_cast<PadAction>(i - kKeyRemapRows))
+                                 : KeyBindings::ActionName(static_cast<BindAction>(i)),
+                          left + 398, rowTop, 2);
+            std::string keyName = selected && gRemapCapturing
+                ? std::string(padRow ? "PRESS BTN" : "PRESS KEY")
+                : padRow
+                    ? std::string(PadBindings::ButtonName(
+                          gPadBindings.Button(static_cast<PadAction>(i - kKeyRemapRows))))
+                    : std::string(SDL_GetScancodeName(
+                          static_cast<SDL_Scancode>(gKeyBindings.Key(static_cast<BindAction>(i)))));
+            for (char& c : keyName)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (keyName.size() > 11)
+                keyName.resize(11);
+            DrawPixelText(keyName.c_str(), left + 590, rowTop, 2);
+        }
+        glColor3f(0.82f, 0.9f, 0.92f);
+        DrawPixelText("ENTER CHANGE", left + 398, top + 390, 2);
+        DrawPixelText("BACKSPACE DEFAULTS", left + 398, top + 414, 2);
+        DrawPixelText("ARROWS AND SHIFT FIXED", left + 398, top + 438, 2);
+    }
+    else if (pControllerConnected)
+    {
+        DrawPixelText("LEFT STICK  STEER", left + 398, top + 80, 2);
+        DrawPixelText("TRIGGERS    DRIVE", left + 398, top + 112, 2);
+        const auto padLine = [&](PadAction pAction, const char* pLabel, int pRow)
+        {
+            std::string line = PadBindings::ButtonName(gPadBindings.Button(pAction));
+            if (line.size() < 12)
+                line.append(12 - line.size(), ' ');
+            line += pLabel;
+            DrawPixelText(line.c_str(), left + 398, top + 144 + pRow * 32, 2);
+        };
+        padLine(PadAction::Jump, "JUMP", 0);
+        padLine(PadAction::Fire, "FIRE", 1);
+        padLine(PadAction::Recover, "RECOVER", 2);
+    }
+    else
+    {
+        const auto keyLine = [&](BindAction pAction, const char* pExtra, const char* pLabel, int pRow)
+        {
+            std::string name = SDL_GetScancodeName(
+                static_cast<SDL_Scancode>(gKeyBindings.Key(pAction)));
+            for (char& c : name)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            std::string line = name + pExtra;
+            if (line.size() < 12)
+                line.append(12 - line.size(), ' ');
+            line += pLabel;
+            DrawPixelText(line.c_str(), left + 398, top + 80 + pRow * 32, 2);
+        };
+        keyLine(BindAction::SteerLeft, " ARROWS", "STEER L", 0);
+        keyLine(BindAction::SteerRight, " ARROWS", "STEER R", 1);
+        keyLine(BindAction::Accelerate, " SHIFT", "ACCEL", 2);
+        keyLine(BindAction::Brake, " DOWN", "BRAKE", 3);
+        DrawPixelText("UP          JUMP", left + 398, top + 80 + 4 * 32, 2);
+        keyLine(BindAction::Fire, "", "FIRE", 5);
+        keyLine(BindAction::Recover, "", "RECOVER", 6);
+    }
+    glColor3f(1.0f, 0.78f, 0.12f);
+    DrawPixelText(gRemapOpen ? "ESC BACK" : "ESC RESUME", left + 492, top + 486, 2);
 }
 
 void DrawMenuHovercraft(int pCenterX, int pCenterY)
@@ -2311,8 +2680,10 @@ void DrawTrackMinimap(int pTrackIndex, int pLeft, int pTop, int pSize)
 }
 
 void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSetting,
-                     bool pAudioEnabled, int pTrackIndex, int pLaps, int pRivalCount,
+                     bool pAudioEnabled, int pMenuVolume, int pRaceVolume,
+                     int pTrackIndex, int pLaps, int pRivalCount,
                      RivalDifficulty pRivalDifficulty, RaceMode pRaceMode, bool pWeaponsAllowed,
+                     CraftClass pCraftClass, bool pSteeringAssist, bool pBrakingAssist,
                      int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
@@ -2408,7 +2779,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glColor3f(0.95f, 0.35f, 0.4f);
         DrawPixelText("GAME LIST", margin + 16, top + 18, 2);
         DrawPixelText("GAME DETAILS", detailLeft + 16, top + 18, 2);
-        DrawPixelText("USERS LIST (2)", margin + 16, bottomTop + 18, 2);
+        const std::string userCount = "USERS LIST (" + std::to_string(gLobbyPlayers.size()) + ")";
+        DrawPixelText(userCount.c_str(), margin + 16, bottomTop + 18, 2);
         DrawPixelText("CHAT", detailLeft + 16, bottomTop + 18, 2);
 
         glColor3f(0.22f, 0.22f, 0.27f);
@@ -2466,9 +2838,19 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             const int playerTop = bottomTop + 74 + playerIndex * 24;
             if (playerTop + 16 >= bottomTop + bottomHeight - 16)
                 break;
-            glColor3f(playerIndex == 0 ? 0.95f : 0.76f, playerIndex == 0 ? 0.35f : 0.76f,
-                      playerIndex == 0 ? 0.4f : 0.82f);
-            DrawPixelText(gLobbyPlayers[playerIndex].mDisplayName.c_str(), margin + 26, playerTop, 2);
+            const LobbyPlayerView& player = gLobbyPlayers[playerIndex];
+            glColor3f(player.mHost ? 0.95f : 0.76f, player.mHost ? 0.72f : 0.76f,
+                      player.mHost ? 0.2f : 0.82f);
+            const bool muted = gLobbyMuteList.IsMuted(
+                static_cast<LobbyPlayerId>(player.mId));
+            std::string presence;
+            if (player.mRoomId != 0)
+                presence = player.mHost ? " HOST" : player.mReady ? " READY" : " NOT READY";
+            else
+                presence = " LOBBY";
+            const std::string playerLabel = player.mDisplayName + presence
+                + (muted ? " MUTED" : "");
+            DrawPixelText(playerLabel.c_str(), margin + 26, playerTop, 2);
         }
 
         const int previewLeft = detailLeft + 18;
@@ -2506,6 +2888,15 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             DrawPixelText(settings.c_str(), previewLeft + previewSize + 16, previewTop + 76, 2);
             DrawPixelText(room.mRaceRunning ? "RACE IN PROGRESS" : "WAITING FOR HOST",
                           previewLeft + previewSize + 16, previewTop + 100, 2);
+            const std::string ready = std::to_string(room.mReadyPlayerCount) + " OF "
+                + std::to_string(room.mPlayerCount) + " READY";
+            DrawPixelText(ready.c_str(), previewLeft + previewSize + 16, previewTop + 124, 2);
+            if (room.mPrivate)
+            {
+                const std::string access = room.mHostId == gLobbyPlayerId && !gHostedRoomCode.empty()
+                    ? "PRIVATE CODE " + gHostedRoomCode : "PRIVATE ROOM";
+                DrawPixelText(access.c_str(), previewLeft + previewSize + 16, previewTop + 148, 2);
+            }
         }
         else
         {
@@ -2520,17 +2911,31 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         const bool selectedRoomIsJoined = gLobbySelectedRoom >= 0
             && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
             && gLobbyRooms[gLobbySelectedRoom].mId == gLobbyJoinedRoomId;
-        DrawLobbyButton(selectedRoomIsHosted ? "START RACE" : selectedRoomIsJoined ? "LEAVE ROOM" : "JOIN GAME",
+        DrawLobbyButton(selectedRoomIsHosted ? "START RACE"
+                            : selectedRoomIsJoined ? (gLobbyReady ? "CANCEL READY" : "READY")
+                                                   : "JOIN GAME",
                         actionLeft + 16, top + 16, actionWidth - 32, true);
         if (!selectedRoomIsHosted)
-            DrawLobbyButton("HOST RACE", actionLeft + 16, top + 72, actionWidth - 32, false);
+            DrawLobbyButton(selectedRoomIsJoined ? "LEAVE ROOM" : "HOST RACE",
+                            actionLeft + 16, top + 72, actionWidth - 32, false);
         glColor3f(0.22f, 0.22f, 0.27f);
         glBegin(GL_LINES);
         glVertex2i(actionLeft + 16, top + 132);
         glVertex2i(actionLeft + actionWidth - 16, top + 132);
         glEnd();
+        glColor3f(0.62f, 0.62f, 0.68f);
+        DrawPixelText("ENTER OR A ACTION", actionLeft + 16, top + 138, 1);
         glColor3f(0.95f, 0.35f, 0.4f);
         DrawPixelText(gLobbyStatus.c_str(), actionLeft + 16, top + 158, 2);
+        if (!gLobbyServerVersion.empty())
+        {
+            glColor3f(0.62f, 0.72f, 0.76f);
+            const std::string server = "SERVER " + gLobbyServerVersion;
+            const std::string compatibility = "PROTOCOL " + std::to_string(gLobbyServerProtocol)
+                + "  CONTENT " + std::to_string(gLobbyServerContent);
+            DrawPixelText(server.c_str(), actionLeft + 16, top + 190, 1);
+            DrawPixelText(compatibility.c_str(), actionLeft + 16, top + 208, 1);
+        }
         DrawLobbyButton("BACK TO MENU", actionLeft + 16, top + topHeight - 58, actionWidth - 32, false);
 
         const int chatLeft = detailLeft + 16;
@@ -2596,7 +3001,8 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     {
         const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
         const char* modeNames[] = {"SINGLE RACE", "TIME TRIAL", "PRACTICE", "CHAMPIONSHIP"};
-        const char* labels[] = {"MODE", "TRACK", "LAPS", "MAX PLAYERS", "RIVALS", "WEAPONS", "HOST RACE", "BACK"};
+        const char* labels[] = {"MODE", "TRACK", "LAPS", "MAX PLAYERS", "RIVALS", "WEAPONS",
+                                "ROOM ACCESS", "HOST RACE", "BACK"};
         glColor3f(0.075f, 0.075f, 0.095f);
         glBegin(GL_QUADS);
         glVertex2i(0, 0);
@@ -2610,19 +3016,19 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         glBegin(GL_QUADS);
         glVertex2i(panelLeft, panelTop);
         glVertex2i(panelLeft + 560, panelTop);
-        glVertex2i(panelLeft + 560, panelTop + 492);
-        glVertex2i(panelLeft, panelTop + 492);
+        glVertex2i(panelLeft + 560, panelTop + 538);
+        glVertex2i(panelLeft, panelTop + 538);
         glEnd();
         glColor3f(0.29f, 0.29f, 0.35f);
         glBegin(GL_LINE_LOOP);
         glVertex2i(panelLeft, panelTop);
         glVertex2i(panelLeft + 560, panelTop);
-        glVertex2i(panelLeft + 560, panelTop + 492);
-        glVertex2i(panelLeft, panelTop + 492);
+        glVertex2i(panelLeft + 560, panelTop + 538);
+        glVertex2i(panelLeft, panelTop + 538);
         glEnd();
         glColor3f(0.95f, 0.35f, 0.4f);
         DrawPixelText("HOST RACE", panelLeft + 190, panelTop + 24, 5);
-        for (int option = 0; option < 8; ++option)
+        for (int option = 0; option < 9; ++option)
         {
             const int rowTop = panelTop + 82 + option * 46;
             const bool selected = option == pSelection;
@@ -2651,45 +3057,52 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             else if (option == 5)
                 value = gHostWeaponsAllowed ? "ALLOWED" : "OFF";
             else if (option == 6)
+                value = gHostPrivateRoom ? "PRIVATE CODE" : "PUBLIC LISTED";
+            else if (option == 7)
                 value = "CREATE ROOM";
             else
                 value = "RETURN TO LOBBY";
             DrawPixelText(value.c_str(), panelLeft + 300, rowTop + 10, 2);
         }
         glColor3f(0.76f, 0.76f, 0.82f);
-        DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", panelLeft + 76, panelTop + 454, 2);
+        DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", panelLeft + 76, panelTop + 500, 2);
     }
     else if (pScreen == FrontScreen::HowToPlay)
     {
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("HOW TO PLAY", pWidth / 2 - 165, 70, 5);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText("SHIFT ACCEL", pWidth / 2 - 98, 190, 3);
+        DrawPixelText("SHIFT OR W ACCEL", pWidth / 2 - 128, 190, 3);
         DrawPixelText("A D STEER", pWidth / 2 - 72, 270, 3);
         DrawPixelText("S BRAKE", pWidth / 2 - 60, 310, 3);
         DrawPixelText("UP JUMP", pWidth / 2 - 60, 350, 3);
         DrawPixelText("CTRL FIRE", pWidth / 2 - 78, 390, 3);
-        DrawPixelText("FOLLOW THE CYAN FLOW MARKERS", pWidth / 2 - 225, 410, 3);
+        DrawPixelText("X RECOVER TO ROAD", pWidth / 2 - 132, 430, 3);
+        DrawPixelText("FOLLOW THE CYAN FLOW MARKERS", pWidth / 2 - 225, 470, 3);
         glColor3f(1.0f, 0.78f, 0.12f);
         DrawPixelText("ENTER TO RETURN", pWidth / 2 - 120, pHeight - 70, 3);
     }
     else if (pScreen == FrontScreen::LocalSetup)
     {
         const char* trackNames[] = {"HARBOR LOOP", "GLASS SWITCHBACK", "VELOCITY RING"};
-        const char* labels[] = {"START RACE", "MODE", "TRACK", "LAPS", "RIVALS", "DIFFICULTY", "WEAPONS", "BACK"};
+        const char* labels[] = {"START RACE", "MODE", "TRACK", "LAPS", "RIVALS", "DIFFICULTY",
+                                "CRAFT", "ASSISTS", "WEAPONS", "BACK"};
         glColor3f(0.2f, 0.9f, 1.0f);
         DrawPixelText("LOCAL RACE", pWidth / 2 - 150, 70, 5);
-        for (int option = 0; option < 8; ++option)
+        for (int option = 0; option < 10; ++option)
         {
-            const int top = 120 + option * 48;
+            const int row = LocalSetupOptionRow(pRaceMode, option);
+            if (row < 0)
+                continue;
+            const int top = 120 + row * 46;
             const bool selected = option == pSelection;
             glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                       selected ? 0.62f : 0.14f);
             glBegin(GL_QUADS);
             glVertex2i(pWidth / 2 - 250, top);
             glVertex2i(pWidth / 2 + 250, top);
-            glVertex2i(pWidth / 2 + 250, top + 52);
-            glVertex2i(pWidth / 2 - 250, top + 52);
+            glVertex2i(pWidth / 2 + 250, top + 40);
+            glVertex2i(pWidth / 2 - 250, top + 40);
             glEnd();
             glColor3f(selected ? 1.0f : 0.72f, selected ? 0.82f : 0.86f,
                       selected ? 0.22f : 0.9f);
@@ -2713,7 +3126,18 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
             else if (option == 5)
                 DrawPixelText(RivalDifficultySetupLabel(pRivalDifficulty), pWidth / 2 + 18, top + 19, 2);
             else if (option == 6)
-                DrawPixelText(pWeaponsAllowed ? "ALLOWED" : "OFF", pWidth / 2 + 120, top + 16, 3);
+            {
+                DrawPixelText(CraftClassName(pCraftClass), pWidth / 2 + 112, top + 10, 3);
+                DrawPixelText(CraftClassDescription(pCraftClass), pWidth / 2 + 18, top + 29, 1);
+            }
+            else if (option == 7)
+            {
+                const char* assists = pSteeringAssist && pBrakingAssist ? "STEER AND BRAKE"
+                    : pSteeringAssist ? "STEERING" : pBrakingAssist ? "BRAKING" : "OFF";
+                DrawPixelText(assists, pWidth / 2 + 54, top + 13, 2);
+            }
+            else if (option == 8)
+                DrawPixelText(pWeaponsAllowed ? "ALLOWED" : "OFF", pWidth / 2 + 120, top + 10, 3);
         }
         glColor3f(0.72f, 0.82f, 0.84f);
         DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", pWidth / 2 - 230, pHeight - 94, 2);
@@ -2777,7 +3201,18 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
         DrawPixelText(pAudioEnabled ? "ON" : "OFF", pWidth / 2 - 24, 420, 3);
         glColor3f(pSelection == 3 ? 1.0f : 0.82f, pSelection == 3 ? 0.78f : 0.9f,
                   pSelection == 3 ? 0.12f : 0.92f);
-        DrawPixelText("BACK", pWidth / 2 - 42, 505, 3);
+        DrawPixelText("MENU VOLUME", pWidth / 2 - 102, 465, 3);
+        char volumeLabel[16];
+        std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", pMenuVolume);
+        DrawPixelText(volumeLabel, pWidth / 2 - 18, 505, 3);
+        glColor3f(pSelection == 4 ? 1.0f : 0.82f, pSelection == 4 ? 0.78f : 0.9f,
+                  pSelection == 4 ? 0.12f : 0.92f);
+        DrawPixelText("RACE VOLUME", pWidth / 2 - 102, 545, 3);
+        std::snprintf(volumeLabel, sizeof(volumeLabel), "%d", pRaceVolume);
+        DrawPixelText(volumeLabel, pWidth / 2 - 18, 580, 3);
+        glColor3f(pSelection == 5 ? 1.0f : 0.82f, pSelection == 5 ? 0.78f : 0.9f,
+                  pSelection == 5 ? 0.12f : 0.92f);
+        DrawPixelText("BACK", pWidth / 2 - 42, 615, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
         DrawPixelText("UP DOWN SELECT  LEFT RIGHT CHANGE", pWidth / 2 - 230, pHeight - 94, 2);
         glColor3f(1.0f, 0.78f, 0.12f);
@@ -2793,15 +3228,133 @@ void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSet
     glEnable(GL_LIGHTING);
 }
 
+void DrawCourseMap(const std::vector<RaceGate>& pWaypoints, const HovercraftState& pPlayerState,
+                   const std::vector<HovercraftState>& pRivalStates, bool pShowRivals,
+                   const RaceGate& pActiveGate, int pWidth)
+{
+    if (pWaypoints.empty())
+        return;
+
+    double minimumX = pWaypoints.front().mX;
+    double maximumX = minimumX;
+    double minimumY = pWaypoints.front().mY;
+    double maximumY = minimumY;
+    for (const RaceGate& waypoint : pWaypoints)
+    {
+        minimumX = std::fmin(minimumX, waypoint.mX);
+        maximumX = std::fmax(maximumX, waypoint.mX);
+        minimumY = std::fmin(minimumY, waypoint.mY);
+        maximumY = std::fmax(maximumY, waypoint.mY);
+    }
+    const double rangeX = std::fmax(1.0, maximumX - minimumX);
+    const double rangeY = std::fmax(1.0, maximumY - minimumY);
+    const int mapSize = 132;
+    const int mapLeft = pWidth - mapSize - 24;
+    const int mapTop = 24;
+    // One scale for both axes keeps the course shape true; the shorter axis is centred.
+    const double mapScale = (mapSize - 16) / std::fmax(rangeX, rangeY);
+    const double insetX = ((mapSize - 16) - rangeX * mapScale) * 0.5;
+    const double insetY = ((mapSize - 16) - rangeY * mapScale) * 0.5;
+    const auto mapX = [&](double x)
+    {
+        return mapLeft + 8 + static_cast<int>(insetX + (x - minimumX) * mapScale);
+    };
+    const auto mapY = [&](double y)
+    {
+        return mapTop + mapSize - 8 - static_cast<int>(insetY + (y - minimumY) * mapScale);
+    };
+
+    glColor3f(0.02f, 0.05f, 0.08f);
+    glBegin(GL_QUADS);
+    glVertex2i(mapLeft, mapTop);
+    glVertex2i(mapLeft + mapSize, mapTop);
+    glVertex2i(mapLeft + mapSize, mapTop + mapSize);
+    glVertex2i(mapLeft, mapTop + mapSize);
+    glEnd();
+    glColor3f(0.2f, 0.8f, 0.9f);
+    glBegin(GL_LINE_LOOP);
+    for (const RaceGate& waypoint : pWaypoints)
+        glVertex2i(mapX(waypoint.mX), mapY(waypoint.mY));
+    glEnd();
+    glPointSize(4.0f);
+    glBegin(GL_POINTS);
+    glVertex2i(mapX(pWaypoints.front().mX), mapY(pWaypoints.front().mY));
+    glEnd();
+    glColor3f(0.18f, 0.96f, 0.4f);
+    glPointSize(7.0f);
+    glBegin(GL_POINTS);
+    glVertex2i(mapX(pActiveGate.mX), mapY(pActiveGate.mY));
+    glEnd();
+    glColor3f(1.0f, 0.78f, 0.12f);
+    glPointSize(8.0f);
+    glBegin(GL_POINTS);
+    glVertex2i(mapX(pPlayerState.mX), mapY(pPlayerState.mY));
+    glEnd();
+    if (pShowRivals)
+    {
+        glColor3f(0.95f, 0.22f, 0.18f);
+        glBegin(GL_POINTS);
+        for (const HovercraftState& rivalState : pRivalStates)
+            glVertex2i(mapX(rivalState.mX), mapY(rivalState.mY));
+        glEnd();
+    }
+    glPointSize(1.0f);
+}
+
+void DrawRouteCue(const HovercraftState& pPlayerState, const RaceGate& pActiveGate,
+                  int pWidth, int pHeight)
+{
+    const double gateDeltaX = pActiveGate.mX - pPlayerState.mX;
+    const double gateDeltaY = pActiveGate.mY - pPlayerState.mY;
+    const int gateDistance = static_cast<int>(std::sqrt(gateDeltaX * gateDeltaX
+                                                        + gateDeltaY * gateDeltaY));
+    char gateLabel[24];
+    std::snprintf(gateLabel, sizeof(gateLabel), "NEXT %d", gateDistance);
+    glColor3f(0.2f, 0.9f, 1.0f);
+    DrawPixelText(gateLabel, 300, 45, 2);
+
+    const double targetHeading = GetGateDirection(pPlayerState, pActiveGate);
+    const double headingOffset = targetHeading - pPlayerState.mHeading;
+    const double forwardX = std::sin(headingOffset);
+    const double forwardY = -std::cos(headingOffset);
+    const double sideX = std::cos(headingOffset);
+    const double sideY = std::sin(headingOffset);
+    const int pointerX = pWidth / 2;
+    const int pointerY = pHeight - 86;
+    glColor3f(0.02f, 0.05f, 0.08f);
+    glBegin(GL_QUADS);
+    glVertex2i(pointerX - 18, pointerY - 15);
+    glVertex2i(pointerX + 18, pointerY - 15);
+    glVertex2i(pointerX + 18, pointerY + 15);
+    glVertex2i(pointerX - 18, pointerY + 15);
+    glEnd();
+    glColor3f(0.2f, 0.9f, 1.0f);
+    glBegin(GL_TRIANGLES);
+    glVertex2d(pointerX + forwardX * 11.0, pointerY + forwardY * 11.0);
+    glVertex2d(pointerX - forwardX * 6.0 + sideX * 6.0,
+               pointerY - forwardY * 6.0 + sideY * 6.0);
+    glVertex2d(pointerX - forwardX * 6.0 - sideX * 6.0,
+               pointerY - forwardY * 6.0 - sideY * 6.0);
+    glEnd();
+}
+
+void DrawRaceCueBanners(bool pCheckpoint, bool pBoost, bool pImpact, int pWidth, int pHeight);
+
 void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
              const std::vector<RaceProgress>& pRivalProgresses,
              const HovercraftState& pPlayerState, const std::vector<HovercraftState>& pRivalStates,
              const RaceGate& pActiveGate, const std::vector<RaceGate>& pWaypoints,
-             bool pShowRivals, bool pWrongWay, int pWinner,
-             int pPlayerPosition, int pCompetitorCount, bool pChampionship, int pStartLights,
+             bool pShowRivals, bool pWrongWay, bool pCheckpointCue, bool pBoostCue,
+             bool pImpactCue, int pWinner,
+             int pPlayerPosition, int pCompetitorCount,
+             const std::vector<int>& pCompetitorPositions, bool pChampionship,
+             bool pChampionshipComplete, bool pChampionshipFinalEvent, int pStartLights,
              bool pShowSetupOverlay, bool pShowResultOverlay, const char* pChampionshipPoints,
-             double pPlayerElapsedSeconds, const LapTiming& pLapTiming, const Missile& pMissile,
+             double pPlayerElapsedSeconds, const LapTiming& pLapTiming, CraftClass pPlayerCraftClass,
+             const Missile& pMissile,
              bool pWeaponsAllowed, bool pPauseMenuOpen, int pPauseMenuSelection,
+             bool pControllerConnected, bool pSteeringAssist, bool pBrakingAssist,
+             int pCameraDistanceSetting, int pMenuVolume, int pRaceVolume,
              int pResultSelection, int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
@@ -2816,17 +3369,11 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glLoadIdentity();
 
     const int speed = static_cast<int>(std::fabs(pPlayerState.mSpeed));
-    const double gateDeltaX = pActiveGate.mX - pPlayerState.mX;
-    const double gateDeltaY = pActiveGate.mY - pPlayerState.mY;
-    const int gateDistance = static_cast<int>(std::sqrt(gateDeltaX * gateDeltaX + gateDeltaY * gateDeltaY));
     char speedLabel[24];
-    char gateLabel[24];
     std::snprintf(speedLabel, sizeof(speedLabel), "SPEED %d", speed);
-    std::snprintf(gateLabel, sizeof(gateLabel), "NEXT %d", gateDistance);
     glColor3f(0.82f, 0.9f, 0.92f);
     DrawPixelText(speedLabel, 300, 27, 2);
-    glColor3f(0.2f, 0.9f, 1.0f);
-    DrawPixelText(gateLabel, 300, 45, 2);
+    DrawRouteCue(pPlayerState, pActiveGate, pWidth, pHeight);
 
     const int resourceLeft = 24;
     const int resourceWidth = 122;
@@ -2893,28 +3440,8 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     glColor3f(1.0f, 0.78f, 0.12f);
     DrawPixelText(positionLabel, pWidth / 2 + 36, 117, 2);
 
-    const double targetHeading = GetGateDirection(pPlayerState, pActiveGate);
-    const double headingOffset = targetHeading - pPlayerState.mHeading;
-    const double forwardX = std::sin(headingOffset);
-    const double forwardY = -std::cos(headingOffset);
-    const double sideX = std::cos(headingOffset);
-    const double sideY = std::sin(headingOffset);
     const int pointerX = pWidth / 2;
     const int pointerY = pHeight - 86;
-    glColor3f(0.02f, 0.05f, 0.08f);
-    glBegin(GL_QUADS);
-    glVertex2i(pointerX - 18, pointerY - 15);
-    glVertex2i(pointerX + 18, pointerY - 15);
-    glVertex2i(pointerX + 18, pointerY + 15);
-    glVertex2i(pointerX - 18, pointerY + 15);
-    glEnd();
-    glColor3f(0.2f, 0.9f, 1.0f);
-    glBegin(GL_TRIANGLES);
-    glVertex2d(pointerX + forwardX * 11.0, pointerY + forwardY * 11.0);
-    glVertex2d(pointerX - forwardX * 6.0 + sideX * 6.0, pointerY - forwardY * 6.0 + sideY * 6.0);
-    glVertex2d(pointerX - forwardX * 6.0 - sideX * 6.0, pointerY - forwardY * 6.0 - sideY * 6.0);
-    glEnd();
-
     if (pWrongWay)
     {
         glColor3f(0.72f, 0.06f, 0.08f);
@@ -2943,65 +3470,8 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
         DrawPixelText("LOSS OF CONTROL", alertLeft + 20, 42, 4);
     }
 
-    if (!pWaypoints.empty())
-    {
-        double minimumX = pWaypoints.front().mX;
-        double maximumX = minimumX;
-        double minimumY = pWaypoints.front().mY;
-        double maximumY = minimumY;
-        for (const RaceGate& waypoint : pWaypoints)
-        {
-            minimumX = std::fmin(minimumX, waypoint.mX);
-            maximumX = std::fmax(maximumX, waypoint.mX);
-            minimumY = std::fmin(minimumY, waypoint.mY);
-            maximumY = std::fmax(maximumY, waypoint.mY);
-        }
-        const double rangeX = std::fmax(1.0, maximumX - minimumX);
-        const double rangeY = std::fmax(1.0, maximumY - minimumY);
-        const int mapSize = 132;
-        const int mapLeft = pWidth - mapSize - 24;
-        const int mapTop = 24;
-        const auto mapX = [&](double x)
-        {
-            return mapLeft + 8 + static_cast<int>((x - minimumX) * (mapSize - 16) / rangeX);
-        };
-        const auto mapY = [&](double y)
-        {
-            return mapTop + mapSize - 8 - static_cast<int>((y - minimumY) * (mapSize - 16) / rangeY);
-        };
-
-        glColor3f(0.02f, 0.05f, 0.08f);
-        glBegin(GL_QUADS);
-        glVertex2i(mapLeft, mapTop);
-        glVertex2i(mapLeft + mapSize, mapTop);
-        glVertex2i(mapLeft + mapSize, mapTop + mapSize);
-        glVertex2i(mapLeft, mapTop + mapSize);
-        glEnd();
-        glColor3f(0.2f, 0.8f, 0.9f);
-        glBegin(GL_LINE_LOOP);
-        for (const RaceGate& waypoint : pWaypoints)
-            glVertex2i(mapX(waypoint.mX), mapY(waypoint.mY));
-        glEnd();
-        glColor3f(0.2f, 0.8f, 0.9f);
-        glPointSize(4.0f);
-        glBegin(GL_POINTS);
-        glVertex2i(mapX(pWaypoints.front().mX), mapY(pWaypoints.front().mY));
-        glEnd();
-        glColor3f(1.0f, 0.78f, 0.12f);
-        glPointSize(8.0f);
-        glBegin(GL_POINTS);
-        glVertex2i(mapX(pPlayerState.mX), mapY(pPlayerState.mY));
-        glEnd();
-        if (pShowRivals)
-        {
-            glColor3f(0.95f, 0.22f, 0.18f);
-            glBegin(GL_POINTS);
-            for (const HovercraftState& rivalState : pRivalStates)
-                glVertex2i(mapX(rivalState.mX), mapY(rivalState.mY));
-            glEnd();
-        }
-        glPointSize(1.0f);
-    }
+    DrawCourseMap(pWaypoints, pPlayerState, pRivalStates, pShowRivals, pActiveGate, pWidth);
+    DrawRaceCueBanners(pCheckpointCue, pBoostCue, pImpactCue, pWidth, pHeight);
 
     for (int lap = 0; lap < pTargetLaps; ++lap)
     {
@@ -3051,11 +3521,16 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
     if (pShowSetupOverlay)
         DrawSetupOverlay(pWidth, pHeight);
     else if (pWinner != 0 && pShowResultOverlay)
-        DrawResultOverlay(pWinner, pPlayerPosition, pCompetitorCount, pChampionship,
-                          pChampionshipPoints, pPlayerElapsedSeconds, pLapTiming, pResultSelection,
+        DrawResultOverlay(pWinner, pPlayerPosition, pCompetitorCount, pCompetitorPositions,
+                          pChampionship,
+                          pChampionshipComplete, pChampionshipFinalEvent,
+                          pChampionshipPoints, pPlayerElapsedSeconds, pLapTiming, pPlayerCraftClass,
+                          pResultSelection,
                           pWidth, pHeight);
     if (pPauseMenuOpen)
-        DrawPauseOverlay(pPauseMenuSelection, pWidth, pHeight);
+        DrawPauseOverlay(pPauseMenuSelection, pControllerConnected, pSteeringAssist,
+                         pBrakingAssist, pCameraDistanceSetting, pMenuVolume, pRaceVolume,
+                         pWidth, pHeight);
 
     for (int light = 0; light < 3; ++light)
     {
@@ -3100,8 +3575,114 @@ void DrawOnlineHudPanel(int pLeft, int pTop, int pWidth, int pHeight)
     glDisable(GL_BLEND);
 }
 
+void DrawRaceCueBanners(bool pCheckpoint, bool pBoost, bool pImpact, int pWidth, int pHeight)
+{
+    const char* labels[3];
+    int labelCount = 0;
+    if (pImpact)
+        labels[labelCount++] = "IMPACT";
+    if (pCheckpoint)
+        labels[labelCount++] = "CHECKPOINT CLEARED";
+    if (pBoost)
+        labels[labelCount++] = "BOOST ACTIVE";
+    for (int index = 0; index < labelCount; ++index)
+    {
+        const int bannerWidth = 260;
+        const int bannerLeft = (pWidth - bannerWidth) / 2;
+        const int bannerTop = pHeight / 2 - 150 + index * 38;
+        glColor3f(labels[index][0] == 'I' ? 0.62f : 0.02f,
+                  labels[index][0] == 'I' ? 0.08f : 0.28f,
+                  labels[index][0] == 'I' ? 0.06f : 0.34f);
+        glBegin(GL_QUADS);
+        glVertex2i(bannerLeft, bannerTop);
+        glVertex2i(bannerLeft + bannerWidth, bannerTop);
+        glVertex2i(bannerLeft + bannerWidth, bannerTop + 30);
+        glVertex2i(bannerLeft, bannerTop + 30);
+        glEnd();
+        glColor3f(1.0f, 0.82f, 0.2f);
+        DrawPixelText(labels[index],
+                      pWidth / 2 - PixelTextWidth(labels[index], 2) / 2,
+                      bannerTop + 8, 2);
+    }
+}
+
+void DrawPracticeGuide(const PracticeGuide& pGuide, bool pControllerConnected,
+                       int pWidth, int pHeight)
+{
+    const char* instruction = "PRACTICE COMPLETE - KEEP DRIVING";
+    switch (pGuide.Step())
+    {
+    case PracticeStep::Accelerate:
+        instruction = pControllerConnected ? "HOLD RIGHT TRIGGER TO ACCELERATE"
+                                           : "HOLD SHIFT OR W TO ACCELERATE";
+        break;
+    case PracticeStep::Steer:
+        instruction = pControllerConnected ? "USE LEFT STICK TO STEER" : "USE A D OR ARROWS TO STEER";
+        break;
+    case PracticeStep::Checkpoint:
+        instruction = "FOLLOW CYAN CUES THROUGH A CHECKPOINT";
+        break;
+    case PracticeStep::Boost:
+        instruction = "DRIVE OVER A CYAN BOOST PAD";
+        break;
+    case PracticeStep::Jump:
+        instruction = pControllerConnected ? "PRESS B TO JUMP" : "PRESS UP TO JUMP";
+        break;
+    case PracticeStep::Recover:
+        instruction = pControllerConnected ? "LEAVE THE ROAD THEN PRESS Y TO RECOVER"
+                                           : "LEAVE THE ROAD THEN PRESS X TO RECOVER";
+        break;
+    case PracticeStep::Fire:
+        instruction = pControllerConnected ? "PRESS X TO FIRE A MISSILE" : "PRESS CTRL TO FIRE A MISSILE";
+        break;
+    case PracticeStep::Complete:
+        break;
+    }
+
+    glDisable(GL_LIGHTING);
+    glDisable(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, pWidth, pHeight, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    const int panelWidth = std::min(520, pWidth - 40);
+    const int panelLeft = (pWidth - panelWidth) / 2;
+    const int panelTop = 152;
+    glColor3f(0.02f, 0.05f, 0.08f);
+    glBegin(GL_QUADS);
+    glVertex2i(panelLeft, panelTop);
+    glVertex2i(panelLeft + panelWidth, panelTop);
+    glVertex2i(panelLeft + panelWidth, panelTop + 58);
+    glVertex2i(panelLeft, panelTop + 58);
+    glEnd();
+    glColor3f(pGuide.Step() == PracticeStep::Complete ? 0.18f : 0.2f,
+              pGuide.Step() == PracticeStep::Complete ? 0.96f : 0.9f,
+              pGuide.Step() == PracticeStep::Complete ? 0.4f : 1.0f);
+    DrawPixelText(instruction,
+                  pWidth / 2 - PixelTextWidth(instruction, 2) / 2, panelTop + 12, 2);
+    char progress[24];
+    std::snprintf(progress, sizeof(progress), "LESSON %d OF %d",
+                  std::min(pGuide.CompletedStepCount() + 1, pGuide.TotalStepCount()),
+                  pGuide.TotalStepCount());
+    glColor3f(0.72f, 0.82f, 0.84f);
+    DrawPixelText(progress, pWidth / 2 - PixelTextWidth(progress, 2) / 2, panelTop + 36, 2);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_FOG);
+    glEnable(GL_LIGHTING);
+}
+
 void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetLaps,
-                   bool pWrongWay, int pWidth, int pHeight)
+                   const RaceGate& pActiveGate, const std::vector<RaceGate>& pWaypoints,
+                   const std::vector<HovercraftState>& pRivalStates, bool pWrongWay,
+                   int pWidth, int pHeight)
 {
     glDisable(GL_LIGHTING);
     glDisable(GL_FOG);
@@ -3164,6 +3745,12 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     DrawPixelText(speedLabel, 30, pHeight - 56, 4);
     DrawPixelText(currentLapLabel, pWidth - 168, pHeight - 58, 2);
     DrawPixelText(bestLapLabel, pWidth - 168, pHeight - 36, 2);
+    DrawRouteCue(pPlayer.mState, pActiveGate, pWidth, pHeight);
+    DrawCourseMap(pWaypoints, pPlayer.mState, pRivalStates, true, pActiveGate, pWidth);
+    const Uint32 cueTicks = SDL_GetTicks();
+    DrawRaceCueBanners(cueTicks < gOnlineCheckpointVisualUntil,
+                       cueTicks < gOnlineBoostVisualUntil,
+                       cueTicks < gOnlineImpactVisualUntil, pWidth, pHeight);
     if (gOnlineCountdownActive)
     {
         const int lensRadius = std::max(14, std::min(30, pWidth / 16));
@@ -3239,14 +3826,40 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     }
     if (gOnlineRaceFinished)
     {
-        DrawOnlineHudPanel(pWidth / 2 - 132, pHeight / 2 - 34, 264, 68);
+        const int resultWidth = 360;
+        const int resultHeight = 166;
+        const int resultLeft = pWidth / 2 - resultWidth / 2;
+        const int resultTop = pHeight / 2 - resultHeight / 2;
+        char resultPlaceLabel[24];
+        char resultTimeLabel[32];
+        char resultLastLapLabel[32];
+        char resultBestLapLabel[32];
+        std::snprintf(resultPlaceLabel, sizeof(resultPlaceLabel), "PLACE %d OF %d",
+                      pPlayer.mPosition, pRacerCount);
+        std::snprintf(resultTimeLabel, sizeof(resultTimeLabel), "TIME %02d %02d",
+                      elapsedSeconds / 60, elapsedSeconds % 60);
+        std::snprintf(resultLastLapLabel, sizeof(resultLastLapLabel), "LAST %02d %02d",
+                      static_cast<int>(pPlayer.mLapTiming.mLastSeconds) / 60,
+                      static_cast<int>(pPlayer.mLapTiming.mLastSeconds) % 60);
+        std::snprintf(resultBestLapLabel, sizeof(resultBestLapLabel), "BEST %02d %02d",
+                      static_cast<int>(pPlayer.mLapTiming.mBestSeconds) / 60,
+                      static_cast<int>(pPlayer.mLapTiming.mBestSeconds) % 60);
+        DrawOnlineHudPanel(resultLeft, resultTop, resultWidth, resultHeight);
         glColor3f(1.0f, 0.78f, 0.12f);
-        DrawPixelText("RACE COMPLETE", pWidth / 2 - 78, pHeight / 2 - 20, 3);
+        DrawPixelText("RACE COMPLETE", pWidth / 2 - PixelTextWidth("RACE COMPLETE", 3) / 2,
+                      resultTop + 16, 3);
         glColor3f(0.82f, 0.9f, 0.92f);
-        DrawPixelText("ENTER FOR LOBBY", pWidth / 2 - 74, pHeight / 2 + 12, 2);
+        DrawPixelText(resultPlaceLabel, resultLeft + 28, resultTop + 56, 2);
+        DrawPixelText(resultTimeLabel, resultLeft + 28, resultTop + 78, 2);
+        DrawPixelText(resultLastLapLabel, resultLeft + 28, resultTop + 100, 2);
+        DrawPixelText(resultBestLapLabel, resultLeft + 190, resultTop + 100, 2);
+        glColor3f(0.2f, 0.9f, 1.0f);
+        DrawPixelText("ENTER FOR LOBBY",
+                      pWidth / 2 - PixelTextWidth("ENTER FOR LOBBY", 2) / 2,
+                      resultTop + 134, 2);
     }
     glColor3f(1.0f, 0.78f, 0.12f);
-    DrawPixelText(positionLabel, pWidth - 168, 32, 2);
+    DrawPixelText(positionLabel, pWidth - 168, 170, 2);
     if (pWrongWay)
     {
         glColor3f(1.0f, 0.2f, 0.12f);
@@ -3257,9 +3870,9 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     if (leaderboardCount > 0)
     {
         const int leaderboardTop = 72;
-        DrawOnlineHudPanel(pWidth - 180, leaderboardTop, 162, 22 + leaderboardCount * 17);
+        DrawOnlineHudPanel(pWidth - 216, leaderboardTop, 198, 22 + leaderboardCount * 17);
         glColor3f(0.2f, 0.9f, 1.0f);
-        DrawPixelText("LEADERS", pWidth - 168, leaderboardTop + 7, 2);
+        DrawPixelText("LEADERS", pWidth - 204, leaderboardTop + 7, 2);
         for (int place = 1; place <= leaderboardCount; ++place)
         {
             const OnlineRacerView* racer = nullptr;
@@ -3273,7 +3886,8 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
             }
             if (racer == nullptr)
                 continue;
-            std::string name = racer->mPlayerId >= 1000000 ? "RIVAL" : "PILOT";
+            std::string name = racer->mPlayerId >= 1000000
+                ? RivalName(static_cast<int>(racer->mPlayerId - 1000000)) : "PILOT";
             for (const LobbyPlayerView& player : gLobbyPlayers)
             {
                 if (player.mId == racer->mPlayerId)
@@ -3282,12 +3896,12 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
                     break;
                 }
             }
-            char entry[32];
+            char entry[48];
             std::snprintf(entry, sizeof(entry), "%d %s", place, name.c_str());
             glColor3f(racer->mPlayerId == gLobbyPlayerId ? 1.0f : 0.82f,
                       racer->mPlayerId == gLobbyPlayerId ? 0.78f : 0.9f,
                       racer->mPlayerId == gLobbyPlayerId ? 0.12f : 0.92f);
-            DrawPixelText(entry, pWidth - 168, leaderboardTop + 26 + (place - 1) * 17, 2);
+            DrawPixelText(entry, pWidth - 204, leaderboardTop + 26 + (place - 1) * 17, 2);
         }
     }
 
@@ -3495,13 +4109,13 @@ int main(int pArgumentCount, char* pArguments[])
     int resultSelection = 0;
     bool steeringAssistEnabled = false;
     bool brakingAssistEnabled = false;
-    bool showControls = false;
     FrontScreen frontScreen = FrontScreen::Welcome;
     int frontSelection = 0;
     int localSetupSelection = 0;
     int settingsSelection = 0;
     int cameraDistanceSetting = 1;
     bool weaponsAllowed = true;
+    PracticeGuide practiceGuide;
     TcpLobbyClient lobbyClient;
     bool lobbyHelloSent = false;
     double onlineInputSeconds = 0.0;
@@ -3516,24 +4130,43 @@ int main(int pArgumentCount, char* pArguments[])
     Missile missile;
     bool fireHeld = false;
     double impactSoundCooldown = 0.0;
+    Uint32 checkpointVisualUntil = 0;
+    Uint32 boostVisualUntil = 0;
+    Uint32 impactVisualUntil = 0;
     InputRecording activeRecording;
+    bool recoveredThisRun = false;
+    bool ghostSubmitted = false;
     InputRecording ghostRecording;
     std::size_t ghostFrame = 0;
     bool ghostActive = false;
     const auto resetRace = [&](bool pStartCountdown = true)
     {
-        if (!activeRecording.Empty())
+        // The ghost is the best completed run for this track and craft class, not the last attempt.
+        const InputRecording* bestGhost = gGhostLibrary.Find(selectedTrack.mId,
+                                                             static_cast<int>(playerCraftClass));
+        ghostActive = bestGhost != nullptr;
+        gGhostSecondsBeforeRace = gGhostLibrary.BestSeconds(selectedTrack.mId,
+                                                            static_cast<int>(playerCraftClass));
+        if (bestGhost != nullptr)
         {
-            ghostRecording = activeRecording;
+            ghostRecording = *bestGhost;
             replayGhost = Hovercraft(CraftClassTuning(playerCraftClass));
             replayGhost.Reset(spawn);
             ghostFrame = 0;
-            ghostActive = true;
         }
         activeRecording.Clear();
+        recoveredThisRun = false;
+        ghostSubmitted = false;
+        gNewGhostBest = false;
         missile.Reset();
         fireHeld = false;
+        checkpointVisualUntil = 0;
+        boostVisualUntil = 0;
+        impactVisualUntil = 0;
+        gRivalNameSlots = PickRivalNames(kRivalCount, static_cast<unsigned int>(
+            SDL_GetPerformanceCounter() ^ (SDL_GetTicks() * 2654435761u)));
         hovercraft.Reset(spawn);
+        gCameraRig.Reset(spawn.mHeading);
         race.Reset();
         lapTimer.Reset();
         raceStart.Reset();
@@ -3545,8 +4178,10 @@ int main(int pArgumentCount, char* pArguments[])
         }
         simulationClock.Reset();
         winner = 0;
+        gRaceWinnerName.clear();
         continueDriving = false;
         resultSelection = 0;
+        practiceGuide.Reset(weaponsAllowed);
         if (pStartCountdown)
             raceStart.Begin();
     };
@@ -3580,10 +4215,73 @@ int main(int pArgumentCount, char* pArguments[])
         FILE* preferences = std::fopen(preferencesFile, "w");
         if (preferences == nullptr)
             return;
-        std::fprintf(preferences, "%d %d %d %d %d %s\n", trackIndex, targetLaps,
+        const char* savedName = gPlayerDisplayName.empty() ? "-" : gPlayerDisplayName.c_str();
+        std::fprintf(preferences, "%d %d %d %d %d %s %d %d %d %d %d\n", trackIndex, targetLaps,
                  weaponsAllowed ? 1 : 0, cameraDistanceSetting, audioFeedback.Enabled() ? 1 : 0,
-                 gPlayerDisplayName.c_str());
+                 savedName, steeringAssistEnabled ? 1 : 0,
+                 brakingAssistEnabled ? 1 : 0, static_cast<int>(playerCraftClass),
+                 static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
+                 static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5));
+        std::fprintf(preferences, "%d\n", static_cast<int>(gCameraMotion));
         std::fclose(preferences);
+    };
+    char bindingsFile[512] = {};
+    if (preferencesFile[0] != '\0')
+    {
+        std::snprintf(bindingsFile, sizeof(bindingsFile), "%s", preferencesFile);
+        char* extension = std::strrchr(bindingsFile, '.');
+        if (extension != nullptr)
+            std::snprintf(extension, sizeof(bindingsFile) - (extension - bindingsFile), ".keys");
+        if (FILE* saved = std::fopen(bindingsFile, "r"))
+        {
+            char text[128] = {};
+            if (std::fgets(text, sizeof(text), saved) != nullptr)
+                gKeyBindings.Parse(text);
+            if (std::fgets(text, sizeof(text), saved) != nullptr)
+                gPadBindings.Parse(text);
+            std::fclose(saved);
+        }
+    }
+    const int ghostVersionTag = kOpenHoverContentVersion * 100 + kGhostPhysicsVersion;
+    char ghostsFile[512] = {};
+    if (preferencesFile[0] != '\0')
+    {
+        std::snprintf(ghostsFile, sizeof(ghostsFile), "%s", preferencesFile);
+        char* extension = std::strrchr(ghostsFile, '.');
+        if (extension != nullptr)
+            std::snprintf(extension, sizeof(ghostsFile) - (extension - ghostsFile), ".ghosts");
+        if (FILE* saved = std::fopen(ghostsFile, "rb"))
+        {
+            std::string text;
+            char chunk[4096];
+            std::size_t read = 0;
+            while ((read = std::fread(chunk, 1, sizeof(chunk), saved)) > 0 && text.size() < (32u << 20))
+                text.append(chunk, read);
+            std::fclose(saved);
+            gGhostLibrary.Parse(text, ghostVersionTag);
+        }
+    }
+    const auto saveGhosts = [&]()
+    {
+        if (ghostsFile[0] == '\0')
+            return;
+        if (FILE* saved = std::fopen(ghostsFile, "wb"))
+        {
+            const std::string text = gGhostLibrary.Serialize(ghostVersionTag);
+            std::fwrite(text.data(), 1, text.size(), saved);
+            std::fclose(saved);
+        }
+    };
+    const auto saveBindings = [&]()
+    {
+        if (bindingsFile[0] == '\0')
+            return;
+        if (FILE* saved = std::fopen(bindingsFile, "w"))
+        {
+            std::fprintf(saved, "%s\n%s\n", gKeyBindings.Serialize().c_str(),
+                         gPadBindings.Serialize().c_str());
+            std::fclose(saved);
+        }
     };
     if (preferencesFile[0] != '\0')
     {
@@ -3593,6 +4291,11 @@ int main(int pArgumentCount, char* pArguments[])
         int savedWeapons = 1;
         int savedCameraDistance = 1;
         int savedAudio = 1;
+        int savedSteeringAssist = 0;
+        int savedBrakingAssist = 0;
+        int savedCraftClass = 0;
+        int savedMenuVolume = 100;
+        int savedRaceVolume = 100;
         char savedDisplayName[25] = {};
         if (preferences != nullptr
             && std::fscanf(preferences, "%d %d %d %d %d", &savedTrack, &savedLaps,
@@ -3606,7 +4309,33 @@ int main(int pArgumentCount, char* pArguments[])
                 ? savedCameraDistance : 1;
             audioFeedback.SetEnabled(savedAudio != 0);
             if (std::fscanf(preferences, "%24s", savedDisplayName) == 1)
-                gPlayerDisplayName = savedDisplayName;
+            {
+                gPlayerDisplayName = std::strcmp(savedDisplayName, "-") == 0 ? "" : savedDisplayName;
+                const int optionalSettings = std::fscanf(preferences, "%d %d %d %d %d",
+                    &savedSteeringAssist, &savedBrakingAssist, &savedCraftClass,
+                    &savedMenuVolume, &savedRaceVolume);
+                if (optionalSettings >= 2)
+                {
+                    steeringAssistEnabled = savedSteeringAssist != 0;
+                    brakingAssistEnabled = savedBrakingAssist != 0;
+                }
+                if (optionalSettings >= 3 && savedCraftClass >= 0 && savedCraftClass <= 2)
+                {
+                    playerCraftClass = static_cast<CraftClass>(savedCraftClass);
+                    hovercraft = Hovercraft(CraftClassTuning(playerCraftClass));
+                    replayGhost = Hovercraft(CraftClassTuning(playerCraftClass));
+                }
+                if (optionalSettings >= 4)
+                {
+                    audioFeedback.SetMenuVolume(savedMenuVolume / 100.0);
+                    audioFeedback.SetRaceVolume((optionalSettings >= 5 ? savedRaceVolume
+                                                                       : savedMenuVolume) / 100.0);
+                }
+                int savedCameraMotion = 0;
+                if (optionalSettings >= 5 && std::fscanf(preferences, "%d", &savedCameraMotion) == 1
+                    && savedCameraMotion >= 0 && savedCameraMotion <= 2)
+                    gCameraMotion = static_cast<CameraMotion>(savedCameraMotion);
+            }
         }
         if (preferences != nullptr)
             std::fclose(preferences);
@@ -3648,6 +4377,22 @@ int main(int pArgumentCount, char* pArguments[])
             resetRace(false);
         }
         else if (pOption == 6)
+        {
+            const int changes = pDirection > 0 ? 1 : 2;
+            for (int change = 0; change < changes; ++change)
+                playerCraftClass = NextCraftClass(playerCraftClass);
+            hovercraft = Hovercraft(CraftClassTuning(playerCraftClass));
+            replayGhost = Hovercraft(CraftClassTuning(playerCraftClass));
+            resetRace(false);
+        }
+        else if (pOption == 7)
+        {
+            int assists = (steeringAssistEnabled ? 1 : 0) | (brakingAssistEnabled ? 2 : 0);
+            assists = (assists + pDirection + 4) % 4;
+            steeringAssistEnabled = (assists & 1) != 0;
+            brakingAssistEnabled = (assists & 2) != 0;
+        }
+        else if (pOption == 8)
             weaponsAllowed = !weaponsAllowed;
         savePreferences();
     };
@@ -3662,22 +4407,28 @@ int main(int pArgumentCount, char* pArguments[])
         continueDriving = false;
         frontScreen = FrontScreen::Welcome;
     };
+    const auto returnToSetup = [&]()
+    {
+        pauseMenuOpen = false;
+        continueDriving = false;
+        frontScreen = FrontScreen::LocalSetup;
+    };
     const auto advanceResult = [&]()
     {
         if (raceMode == RaceMode::Championship)
         {
-            if (championship.AdvanceEvent())
-            {
-                trackIndex = championship.CurrentEvent();
-                loadTrack();
-            }
-            else if (championship.Complete())
+            if (championship.Complete())
             {
                 championship.Reset();
                 trackIndex = championship.CurrentEvent();
                 loadTrack();
             }
-            else
+            else if (championship.AdvanceEvent())
+            {
+                trackIndex = championship.CurrentEvent();
+                loadTrack();
+            }
+            else if (!championship.Complete())
                 resetRace();
         }
         else
@@ -3696,11 +4447,17 @@ int main(int pArgumentCount, char* pArguments[])
         gOnlineChatMessages.clear();
         gOnlineChatInput.clear();
         gOnlineChatInputFocused = false;
+        gLobbyMuteList.Clear();
+        gHostedRoomCode.clear();
+        gLobbyReady = false;
         gLobbySelectedRoom = -1;
         gLobbyPlayerId = 0;
         gLobbyJoinedRoomId = 0;
         gLobbyJoinPendingRoomId = 0;
         gLobbyStatus = "DISCONNECTED";
+        gLobbyServerVersion.clear();
+        gLobbyServerProtocol = 0;
+        gLobbyServerContent = 0;
         gOnlineRaceRoomId = 0;
         gOnlineRaceTick = 0;
         gOnlineTargetLaps = 0;
@@ -3712,6 +4469,9 @@ int main(int pArgumentCount, char* pArguments[])
         gOnlineSpinOutActive = false;
         gOnlineBoostCue = false;
         gOnlineImpactCue = false;
+        gOnlineCheckpointVisualUntil = 0;
+        gOnlineBoostVisualUntil = 0;
+        gOnlineImpactVisualUntil = 0;
         gOnlineStartLights = 0;
         gOnlineCountdownActive = false;
         gOnlineCountdownSeconds = 0;
@@ -3744,7 +4504,137 @@ int main(int pArgumentCount, char* pArguments[])
         else
         {
             frontScreen = FrontScreen::Multiplayer;
+            gReconnectPolicy.Reset();
             connectLobby();
+        }
+    };
+    const auto submitChat = [&](std::string& pInput)
+    {
+        const bool muteCommand = pInput.compare(0, 6, "/MUTE ") == 0;
+        const bool unmuteCommand = pInput.compare(0, 8, "/UNMUTE ") == 0;
+        const bool reportCommand = pInput.compare(0, 8, "/REPORT ") == 0;
+        const bool joinCommand = pInput.compare(0, 6, "/JOIN ") == 0;
+        if (pInput == "/READY")
+        {
+            if (gLobbyJoinedRoomId == 0)
+                gLobbyStatus = "JOIN A ROOM FIRST";
+            else
+            {
+                bool localPlayerIsHost = false;
+                for (const LobbyRoomView& room : gLobbyRooms)
+                    localPlayerIsHost = localPlayerIsHost
+                        || (room.mId == gLobbyJoinedRoomId && room.mHostId == gLobbyPlayerId);
+                if (localPlayerIsHost)
+                    gLobbyStatus = "HOST IS ALWAYS READY";
+                else
+                {
+                    gLobbyReady = !gLobbyReady;
+                    if (lobbyClient.SendCommand(std::string("READY ") + (gLobbyReady ? "1" : "0")))
+                        gLobbyStatus = gLobbyReady ? "READY TO RACE" : "NOT READY";
+                }
+            }
+            pInput.clear();
+            return;
+        }
+        if (joinCommand)
+        {
+            const std::string code = pInput.substr(6);
+            if (code.size() == 6 && lobbyClient.SendCommand("JOINCODE " + code))
+                gLobbyStatus = "JOINING PRIVATE ROOM";
+            else
+                gLobbyStatus = "USE /JOIN ROOMCODE";
+            pInput.clear();
+            return;
+        }
+        if (!muteCommand && !unmuteCommand && !reportCommand)
+        {
+            if (lobbyClient.SendCommand("CHAT " + pInput))
+                pInput.clear();
+            return;
+        }
+
+        const std::size_t nameStart = muteCommand ? 6 : 8;
+        const std::size_t reasonStart = reportCommand ? pInput.find(' ', nameStart) : std::string::npos;
+        const std::string displayName = pInput.substr(nameStart,
+            reasonStart == std::string::npos ? std::string::npos : reasonStart - nameStart);
+        const LobbyPlayerView* target = nullptr;
+        for (const LobbyPlayerView& player : gLobbyPlayers)
+        {
+            if (player.mDisplayName == displayName)
+            {
+                target = &player;
+                break;
+            }
+        }
+        if (target == nullptr)
+            gLobbyStatus = "PLAYER NOT FOUND";
+        else if (target->mId == gLobbyPlayerId)
+            gLobbyStatus = reportCommand ? "YOU CANNOT REPORT YOURSELF" : "YOU CANNOT MUTE YOURSELF";
+        else if (reportCommand && (reasonStart == std::string::npos
+                                  || !IsValidLobbyReportReason(pInput.substr(reasonStart + 1))))
+            gLobbyStatus = "USE /REPORT NAME REASON";
+        else if (reportCommand)
+        {
+            lobbyClient.SendCommand("REPORT " + std::to_string(target->mId) + "|"
+                                    + pInput.substr(reasonStart + 1));
+            gLobbyStatus = "SENDING REPORT";
+        }
+        else
+        {
+            if (muteCommand)
+                gLobbyMuteList.Mute(static_cast<LobbyPlayerId>(target->mId));
+            else
+                gLobbyMuteList.Unmute(static_cast<LobbyPlayerId>(target->mId));
+            gLobbyStatus = std::string(muteCommand ? "MUTED " : "UNMUTED ") + target->mDisplayName;
+        }
+        pInput.clear();
+    };
+    const auto activateLobbyPrimary = [&]()
+    {
+        if (gLobbySelectedRoom < 0 || gLobbySelectedRoom >= static_cast<int>(gLobbyRooms.size()))
+            return;
+        gLobbyChatInputFocused = false;
+        const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
+        if (room.mHostId == gLobbyPlayerId)
+            lobbyClient.SendCommand("START " + std::to_string(room.mId));
+        else if (room.mId == gLobbyJoinedRoomId)
+        {
+            const bool nextReady = !gLobbyReady;
+            if (lobbyClient.SendCommand(std::string("READY ") + (nextReady ? "1" : "0")))
+            {
+                gLobbyReady = nextReady;
+                gLobbyStatus = gLobbyReady ? "READY TO RACE" : "NOT READY";
+            }
+        }
+        else if (lobbyClient.SendCommand("JOIN " + std::to_string(room.mId)))
+        {
+            gLobbyJoinedRoomId = room.mId;
+            gLobbyJoinPendingRoomId = room.mId;
+            gLobbyReady = false;
+            gLobbyStatus = "JOINING RACE";
+        }
+    };
+    const auto activateLobbySecondary = [&]()
+    {
+        const LobbyRoomView* room = gLobbySelectedRoom >= 0
+            && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
+            ? &gLobbyRooms[gLobbySelectedRoom] : nullptr;
+        if (room != nullptr && room->mId == gLobbyJoinedRoomId
+            && room->mHostId != gLobbyPlayerId)
+        {
+            if (lobbyClient.SendCommand("LEAVE"))
+            {
+                gLobbyJoinedRoomId = 0;
+                gLobbyJoinPendingRoomId = 0;
+                gLobbyReady = false;
+                gLobbyStatus = "LEFT ROOM";
+            }
+        }
+        else if (room == nullptr || room->mHostId != gLobbyPlayerId)
+        {
+            gLobbyChatInputFocused = false;
+            gHostSetupSelection = 0;
+            frontScreen = FrontScreen::HostRaceSetup;
         }
     };
     const auto updateLobby = [&]()
@@ -3752,30 +4642,100 @@ int main(int pArgumentCount, char* pArguments[])
         if (frontScreen != FrontScreen::Multiplayer && frontScreen != FrontScreen::HostRaceSetup
             && frontScreen != FrontScreen::OnlineRace)
             return;
+        if (gReconnectPolicy.TakeDueAttempt(SDL_GetTicks() / 1000.0))
+            connectLobby();
+        else if (gReconnectPolicy.Pending())
+        {
+            gLobbyStatus = "CONNECTION LOST - RECONNECTING IN "
+                + std::to_string(static_cast<int>(
+                      gReconnectPolicy.SecondsUntilNext(SDL_GetTicks() / 1000.0) + 0.99))
+                + "S (" + std::to_string(gReconnectPolicy.Attempt()) + "/"
+                + std::to_string(ReconnectPolicy::kMaxAttempts) + ")";
+        }
         lobbyClient.Tick();
         if (lobbyClient.State() == TcpLobbyClientState::Connecting)
             gLobbyStatus = "CONNECTING";
         else if (lobbyClient.State() == TcpLobbyClientState::Failed)
-            gLobbyStatus = "SERVER UNAVAILABLE";
+        {
+            const bool raceConnectionLost = frontScreen == FrontScreen::OnlineRace;
+            lobbyClient.Disconnect();
+            lobbyHelloSent = false;
+            gLobbyPlayers.clear();
+            gLobbyRooms.clear();
+            gLobbySelectedRoom = -1;
+            gLobbyPlayerId = 0;
+            gLobbyJoinedRoomId = 0;
+            gLobbyJoinPendingRoomId = 0;
+            gLobbyServerVersion.clear();
+            gLobbyServerProtocol = 0;
+            gLobbyServerContent = 0;
+            gOnlineRaceRoomId = 0;
+            gOnlineRaceTick = 0;
+            gOnlineTargetLaps = 0;
+            gOnlineRacers.clear();
+            gOnlineMissiles.clear();
+            gOnlineMineTriggered.clear();
+            gOnlineRaceFinished = false;
+            gOnlineChatInput.clear();
+            gOnlineChatInputFocused = false;
+            gLobbyChatInputFocused = false;
+            if (raceConnectionLost)
+                frontScreen = FrontScreen::Multiplayer;
+            if (gReconnectPolicy.OnLost(SDL_GetTicks() / 1000.0))
+            {
+                if (raceConnectionLost)
+                    frontScreen = FrontScreen::Multiplayer;
+                gLobbyStatus = "CONNECTION LOST - RECONNECTING";
+            }
+            else
+                gLobbyStatus = raceConnectionLost ? "CONNECTION LOST - BACK THEN RETRY"
+                                                  : "SERVER UNAVAILABLE - BACK THEN RETRY";
+        }
         else if (lobbyClient.State() == TcpLobbyClientState::Connected && !lobbyHelloSent)
         {
-            lobbyHelloSent = lobbyClient.SendCommand("HELLO " + lobbyDisplayName);
+            lobbyHelloSent = lobbyClient.SendCommand("HELLO "
+                + std::to_string(kOpenHoverProtocolVersion) + "|"
+                + std::to_string(kOpenHoverContentVersion) + "|" + lobbyDisplayName);
             gLobbyStatus = lobbyHelloSent ? "CONNECTING" : "SERVER UNAVAILABLE";
         }
         for (const std::string& message : lobbyClient.TakeMessages())
         {
-            if (message.compare(0, 5, "LOBBY") == 0)
+            if (message.compare(0, 10, "OPENHOVER ") == 0)
+            {
+                std::istringstream greeting(message.substr(10));
+                int protocol = 0;
+                int content = 0;
+                std::string version;
+                if (greeting >> protocol >> content >> version)
+                {
+                    gLobbyServerProtocol = protocol;
+                    gLobbyServerContent = content;
+                    gLobbyServerVersion = version;
+                }
+            }
+            else if (message.compare(0, 5, "LOBBY") == 0)
             {
                 ParseLobbySnapshot(message);
+                gReconnectPolicy.OnConnected();
                 gLobbyStatus = "CONNECTED";
             }
             else if (message.compare(0, 8, "WELCOME ") == 0)
                 gLobbyPlayerId = std::atoi(message.substr(8).c_str());
+            else if (message.compare(0, 10, "REPORTACK ") == 0)
+                gLobbyStatus = "REPORT RECEIVED - THANK YOU";
+            else if (message.compare(0, 7, "JOINED ") == 0)
+            {
+                gLobbyJoinedRoomId = std::atoi(message.substr(7).c_str());
+                gLobbyReady = false;
+                gLobbyStatus = "JOINED PRIVATE ROOM";
+            }
             else if (message.compare(0, 5, "CHAT ") == 0)
             {
                 const std::size_t textStart = message.find(' ', 5);
                 const int senderId = std::atoi(message.substr(5, textStart - 5).c_str());
                 const std::string text = textStart == std::string::npos ? "" : message.substr(textStart + 1);
+                if (senderId != 0 && gLobbyMuteList.IsMuted(static_cast<LobbyPlayerId>(senderId)))
+                    continue;
                 std::string senderName = senderId == 0 ? "LOBBY" : "PILOT";
                 for (const LobbyPlayerView& player : gLobbyPlayers)
                 {
@@ -3795,7 +4755,11 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 gHostCreatePending = false;
                 gLobbyJoinedRoomId = std::atoi(message.substr(5).c_str());
-                gLobbyStatus = "ROOM CREATED";
+                const std::size_t codeSeparator = message.find('|', 5);
+                gHostedRoomCode = codeSeparator == std::string::npos
+                    ? "" : message.substr(codeSeparator + 1);
+                gLobbyStatus = gHostedRoomCode.empty() ? "ROOM CREATED"
+                    : "PRIVATE ROOM CREATED";
                 frontScreen = FrontScreen::Multiplayer;
             }
             else if (message.compare(0, 5, "RACE ") == 0 && ParseRaceSnapshot(message))
@@ -3803,11 +4767,13 @@ int main(int pArgumentCount, char* pArguments[])
                 if (gOnlineBoostCue)
                 {
                     audioFeedback.PlayBoost();
+                    gOnlineBoostVisualUntil = SDL_GetTicks() + 650;
                     gOnlineBoostCue = false;
                 }
                 if (gOnlineImpactCue)
                 {
                     audioFeedback.PlayImpact();
+                    gOnlineImpactVisualUntil = SDL_GetTicks() + 650;
                     gOnlineImpactCue = false;
                 }
                 if (frontScreen != FrontScreen::OnlineRace)
@@ -3847,6 +4813,7 @@ int main(int pArgumentCount, char* pArguments[])
                 if (ParseRaceHudSnapshot(message) && gOnlineCheckpointCue)
                 {
                     audioFeedback.PlayCheckpoint();
+                    gOnlineCheckpointVisualUntil = SDL_GetTicks() + 850;
                     gOnlineCheckpointCue = false;
                 }
             }
@@ -3892,6 +4859,29 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                 }
             }
+            else if (message.compare(0, 10, "RACEABORT ") == 0)
+            {
+                const std::size_t reasonSeparator = message.find('|', 10);
+                const int roomId = std::atoi(message.substr(10, reasonSeparator - 10).c_str());
+                if (roomId == gOnlineRaceRoomId)
+                {
+                    const std::string reason = reasonSeparator == std::string::npos
+                        ? "CONNECTION LOST" : message.substr(reasonSeparator + 1);
+                    gOnlineRaceRoomId = 0;
+                    gOnlineRaceTick = 0;
+                    gOnlineTargetLaps = 0;
+                    gOnlineRacers.clear();
+                    gOnlineMissiles.clear();
+                    gOnlineMineTriggered.clear();
+                    gOnlineRaceFinished = false;
+                    gOnlineChatInput.clear();
+                    gOnlineChatInputFocused = false;
+                    gLobbyChatInputFocused = true;
+                    SDL_StartTextInput();
+                    frontScreen = FrontScreen::Multiplayer;
+                    gLobbyStatus = "RACE ENDED - " + reason;
+                }
+            }
             else if (message.compare(0, 11, "RACEFINISH ") == 0
                      && std::atoi(message.substr(11).c_str()) == gOnlineRaceRoomId)
             {
@@ -3915,6 +4905,24 @@ int main(int pArgumentCount, char* pArguments[])
                     gLobbyStatus = "ALREADY JOINED";
                 else if (error == "room unavailable")
                     gLobbyStatus = "ROOM UNAVAILABLE";
+                else if (error.find("INCOMPATIBLE PROTOCOL") == 0)
+                    gLobbyStatus = "UPDATE GAME - PROTOCOL MISMATCH";
+                else if (error.find("INCOMPATIBLE CONTENT") == 0)
+                    gLobbyStatus = "UPDATE GAME - TRACK CONTENT MISMATCH";
+                else if (error.find("INCOMPATIBLE CLIENT") == 0)
+                    gLobbyStatus = "UPDATE GAME TO JOIN";
+                else if (error == "invalid name")
+                    gLobbyStatus = "NAME USES INVALID CHARACTERS";
+                else if (error == "chat rate limit")
+                    gLobbyStatus = "CHAT SLOW MODE - TRY AGAIN";
+                else if (error == "report rate limit")
+                    gLobbyStatus = "REPORT LIMIT REACHED - TRY LATER";
+                else if (error == "invalid report")
+                    gLobbyStatus = "REPORT COULD NOT BE SENT";
+                else if (error == "server full")
+                    gLobbyStatus = "SERVER FULL - TRY LATER";
+                else if (error == "players not ready")
+                    gLobbyStatus = "WAITING FOR ALL PLAYERS TO READY";
                 else
                     gLobbyStatus = "SERVER ERROR";
             }
@@ -3929,6 +4937,26 @@ int main(int pArgumentCount, char* pArguments[])
         {
             if (event.type == SDL_QUIT)
                 running = false;
+            if (event.type == SDL_CONTROLLERBUTTONDOWN && !gRemapCapturing)
+            {
+                const bool raceScreen = frontScreen == FrontScreen::RaceSetup;
+                const bool resultsOpen = raceScreen && winner != 0 && !continueDriving;
+                PadMenuContext padContext = PadMenuContext::Menu;
+                if (frontScreen == FrontScreen::OnlineRace || (raceScreen && !pauseMenuOpen && !resultsOpen))
+                    padContext = PadMenuContext::Driving;
+                else if (frontScreen == FrontScreen::Multiplayer)
+                    padContext = PadMenuContext::LobbyList;
+                const int padKey = PadMenuKey(event.cbutton.button, padContext);
+                if (padKey != 0)
+                {
+                    event.type = SDL_KEYDOWN;
+                    event.key.state = SDL_PRESSED;
+                    event.key.repeat = 0;
+                    event.key.keysym.sym = padKey;
+                    event.key.keysym.scancode = SDL_GetScancodeFromKey(padKey);
+                    event.key.keysym.mod = KMOD_NONE;
+                }
+            }
             if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
                 int windowWidth = 0;
@@ -3983,36 +5011,12 @@ int main(int pArgumentCount, char* pArguments[])
                     const int inputTop = bottomTop + bottomHeight - 46;
                     if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 16, actionWidth - 32, 42)
                         && gLobbySelectedRoom >= 0 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size()))
-                    {
-                        gLobbyChatInputFocused = false;
-                        const LobbyRoomView& room = gLobbyRooms[gLobbySelectedRoom];
-                        if (room.mHostId == gLobbyPlayerId)
-                            lobbyClient.SendCommand("START " + std::to_string(room.mId));
-                        else if (room.mId == gLobbyJoinedRoomId)
-                        {
-                            if (lobbyClient.SendCommand("LEAVE"))
-                            {
-                                gLobbyJoinedRoomId = 0;
-                                gLobbyJoinPendingRoomId = 0;
-                                gLobbyStatus = "LEFT ROOM";
-                            }
-                        }
-                        else if (lobbyClient.SendCommand("JOIN " + std::to_string(room.mId)))
-                        {
-                            gLobbyJoinedRoomId = room.mId;
-                            gLobbyJoinPendingRoomId = room.mId;
-                            gLobbyStatus = "JOINING RACE";
-                        }
-                    }
+                        activateLobbyPrimary();
                     else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + 72, actionWidth - 32, 42)
                             && !(gLobbySelectedRoom >= 0
                                 && gLobbySelectedRoom < static_cast<int>(gLobbyRooms.size())
                                 && gLobbyRooms[gLobbySelectedRoom].mHostId == gLobbyPlayerId))
-                    {
-                        gLobbyChatInputFocused = false;
-                        gHostSetupSelection = 0;
-                        frontScreen = FrontScreen::HostRaceSetup;
-                    }
+                        activateLobbySecondary();
                     else if (IsPointInRect(mouseX, mouseY, actionLeft + 16, top + topHeight - 58, actionWidth - 32, 42))
                     {
                         leaveLobby();
@@ -4028,8 +5032,7 @@ int main(int pArgumentCount, char* pArguments[])
                     else if (IsPointInRect(mouseX, mouseY, chatLeft + chatWidth - 76, inputTop - 5, 76, 42)
                              && !gLobbyChatInput.empty())
                     {
-                        if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
-                            gLobbyChatInput.clear();
+                        submitChat(gLobbyChatInput);
                         gLobbyChatInputFocused = true;
                     }
                     else if (IsPointInRect(mouseX, mouseY, chatLeft, inputTop, chatWidth, 32))
@@ -4043,21 +5046,24 @@ int main(int pArgumentCount, char* pArguments[])
                     const int panelLeft = drawableWidth / 2 - 280;
                     const int panelTop = 72;
                     const int option = (mouseY - (panelTop + 82)) / 46;
-                    if (option >= 0 && option < 8
+                    if (option >= 0 && option < 9
                         && IsPointInRect(mouseX, mouseY, panelLeft + 18, panelTop + 82 + option * 46, 524, 36))
                     {
                         gHostSetupSelection = option;
                         if (option == 6)
+                            gHostPrivateRoom = !gHostPrivateRoom;
+                        else if (option == 7)
                         {
                             const std::string command = "CREATE " + builtInTracks[gHostTrackIndex].mName + "|"
                                 + std::to_string(gHostRaceMode)
                                 + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
                                 + "|" + std::to_string(gHostPlayerCapacity) + "|"
-                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0");
+                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0")
+                                + "|" + (gHostPrivateRoom ? "1" : "0");
                             gHostCreatePending = lobbyClient.SendCommand(command);
                             gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
                         }
-                        else if (option == 7)
+                        else if (option == 8)
                             frontScreen = FrontScreen::Multiplayer;
                     }
                 }
@@ -4081,7 +5087,21 @@ int main(int pArgumentCount, char* pArguments[])
                         audioFeedback.SetEnabled(!audioFeedback.Enabled());
                         savePreferences();
                     }
-                    else if (mouseY >= 480 && mouseY < 570)
+                    else if (mouseY >= 455 && mouseY < 540)
+                    {
+                        const int volume = (static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5) + 25)
+                            % 125;
+                        audioFeedback.SetMenuVolume(volume / 100.0);
+                        savePreferences();
+                    }
+                    else if (mouseY >= 540 && mouseY < 605)
+                    {
+                        const int volume = (static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5) + 25)
+                            % 125;
+                        audioFeedback.SetRaceVolume(volume / 100.0);
+                        savePreferences();
+                    }
+                    else if (mouseY >= 605 && mouseY < 650)
                         frontScreen = FrontScreen::Welcome;
                 }
                 else if (frontScreen == FrontScreen::DisplayNameSetup)
@@ -4104,42 +5124,86 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 else if (frontScreen == FrontScreen::LocalSetup)
                 {
-                    const int option = (mouseY - 120) / 48;
-                    if (option >= 0 && option < 8
-                        && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250, 120 + option * 48, 500, 52))
+                    int clickedOption = -1;
+                    for (int option = 0; option < 10; ++option)
                     {
-                        localSetupSelection = option;
-                        if (option == 0)
+                        const int row = LocalSetupOptionRow(raceMode, option);
+                        if (row >= 0 && IsPointInRect(mouseX, mouseY, drawableWidth / 2 - 250,
+                                                     120 + row * 46, 500, 40))
+                        {
+                            clickedOption = option;
+                            break;
+                        }
+                    }
+                    if (clickedOption >= 0)
+                    {
+                        localSetupSelection = clickedOption;
+                        if (clickedOption == 0)
                             startLocalRace();
-                        else if (option == 7)
+                        else if (clickedOption == 9)
                             frontScreen = FrontScreen::Welcome;
                         else
-                            changeLocalSetupOption(option, 1);
+                            changeLocalSetupOption(clickedOption, 1);
                     }
                 }
                 else if (pauseMenuOpen)
                 {
-                    const int left = (drawableWidth - 340) / 2;
-                    const int top = (drawableHeight - 236) / 2;
-                    const int option = (mouseY - (top + 82)) / 44;
-                    if (option >= 0 && option < 3
-                        && IsPointInRect(mouseX, mouseY, left + 24, top + 82 + option * 44, 292, 34))
+                    const int left = (drawableWidth - 760) / 2;
+                    const int top = (drawableHeight - 536) / 2;
+                    const int option = (mouseY - (top + 70)) / 44;
+                    if (option >= 0 && option < 10
+                        && IsPointInRect(mouseX, mouseY, left + 24, top + 70 + option * 44, 326, 34))
                     {
                         pauseMenuSelection = option;
                         if (option == 0)
                             pauseMenuOpen = false;
                         else if (option == 1)
+                        {
+                            steeringAssistEnabled = !steeringAssistEnabled;
+                            savePreferences();
+                        }
+                        else if (option == 2)
+                        {
+                            brakingAssistEnabled = !brakingAssistEnabled;
+                            savePreferences();
+                        }
+                        else if (option == 3)
+                        {
+                            cameraDistanceSetting = (cameraDistanceSetting + 1) % 3;
+                            savePreferences();
+                        }
+                        else if (option == 4)
+                        {
+                            gCameraMotion = NextCameraMotion(gCameraMotion, 1);
+                            savePreferences();
+                        }
+                        else if (option == 5)
+                        {
+                            audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
+                            savePreferences();
+                        }
+                        else if (option == 6)
+                        {
+                            audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                            savePreferences();
+                        }
+                        else if (option == 7)
+                        {
+                            gRemapOpen = true;
+                            gRemapCapturing = false;
+                        }
+                        else if (option == 8)
                             returnToMainMenu();
-                        else
+                        else if (option == 9)
                             running = false;
                     }
                 }
                 else if (winner != 0 && !continueDriving)
                 {
-                    const int panelHeight = raceMode == RaceMode::Championship ? 310 : 268;
-                    const int left = (drawableWidth - 420) / 2;
+                    const int panelHeight = raceMode == RaceMode::Championship ? 350 : 352;
+                    const int left = (drawableWidth - 620) / 2;
                     const int top = (drawableHeight - panelHeight) / 2 - 10;
-                    const int actionsTop = top + (raceMode == RaceMode::Championship ? 248 : 198);
+                    const int actionsTop = top + 294 - (raceMode == RaceMode::Championship ? 0 : 2);
                     if (IsPointInRect(mouseX, mouseY, left + 24, actionsTop, 178, 38))
                     {
                         resultSelection = 0;
@@ -4148,6 +5212,11 @@ int main(int pArgumentCount, char* pArguments[])
                     else if (IsPointInRect(mouseX, mouseY, left + 218, actionsTop, 178, 38))
                     {
                         resultSelection = 1;
+                        returnToSetup();
+                    }
+                    else if (IsPointInRect(mouseX, mouseY, left + 412, actionsTop, 178, 38))
+                    {
+                        resultSelection = 2;
                         returnToMainMenu();
                     }
                 }
@@ -4206,27 +5275,58 @@ int main(int pArgumentCount, char* pArguments[])
                     else
                         running = false;
                 }
+                else if (event.type == SDL_CONTROLLERBUTTONDOWN
+                         && frontScreen == FrontScreen::Multiplayer)
+                {
+                    gLobbyChatInputFocused = false;
+                    if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP && !gLobbyRooms.empty())
+                        gLobbySelectedRoom = (gLobbySelectedRoom + static_cast<int>(gLobbyRooms.size()) - 1)
+                            % static_cast<int>(gLobbyRooms.size());
+                    else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN
+                             && !gLobbyRooms.empty())
+                        gLobbySelectedRoom = (gLobbySelectedRoom + 1)
+                            % static_cast<int>(gLobbyRooms.size());
+                    else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A)
+                        activateLobbyPrimary();
+                    else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_X)
+                        activateLobbySecondary();
+                }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer
                          && gLobbyChatInputFocused)
                 {
-                    if (event.key.keysym.sym == SDLK_BACKSPACE && !gLobbyChatInput.empty())
+                    if (event.key.keysym.sym == SDLK_TAB)
+                        gLobbyChatInputFocused = false;
+                    else if (event.key.keysym.sym == SDLK_BACKSPACE && !gLobbyChatInput.empty())
                         gLobbyChatInput.erase(gLobbyChatInput.size() - 1);
                     else if ((event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                              && !gLobbyChatInput.empty())
                     {
-                        if (lobbyClient.SendCommand("CHAT " + gLobbyChatInput))
-                            gLobbyChatInput.clear();
+                        submitChat(gLobbyChatInput);
                     }
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Multiplayer
                          && !gLobbyChatInputFocused)
                 {
-                    if (event.key.keysym.sym == SDLK_UP && !gLobbyRooms.empty())
+                    if (event.key.keysym.sym == SDLK_TAB)
+                    {
+                        gLobbyChatInputFocused = true;
+                        SDL_StartTextInput();
+                    }
+                    else if (event.key.keysym.sym == SDLK_UP && !gLobbyRooms.empty())
                         gLobbySelectedRoom = (gLobbySelectedRoom + static_cast<int>(gLobbyRooms.size()) - 1)
                             % static_cast<int>(gLobbyRooms.size());
                     else if (event.key.keysym.sym == SDLK_DOWN && !gLobbyRooms.empty())
                         gLobbySelectedRoom = (gLobbySelectedRoom + 1) % static_cast<int>(gLobbyRooms.size());
+                    else if (event.key.keysym.sym == SDLK_RETURN
+                             || event.key.keysym.sym == SDLK_KP_ENTER)
+                        activateLobbyPrimary();
+                    else if (event.key.keysym.sym == SDLK_x)
+                        activateLobbySecondary();
                 }
+                else if (event.type == SDL_CONTROLLERBUTTONDOWN
+                         && event.cbutton.button == gPadBindings.Button(PadAction::Recover)
+                         && frontScreen == FrontScreen::OnlineRace && !gOnlineRaceFinished)
+                    gOnlineRecoveryRequested = true;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::OnlineRace)
                 {
                     if (gOnlineRaceFinished
@@ -4262,8 +5362,8 @@ int main(int pArgumentCount, char* pArguments[])
                     else if (gOnlineChatInputFocused
                              && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
                     {
-                        if (!gOnlineChatInput.empty() && lobbyClient.SendCommand("CHAT " + gOnlineChatInput))
-                            gOnlineChatInput.clear();
+                        if (!gOnlineChatInput.empty())
+                            submitChat(gOnlineChatInput);
                     }
                     else if (gOnlineChatInputFocused)
                         AppendOnlineChatKey(gOnlineChatInput, event.key.keysym.sym, event.key.keysym.mod);
@@ -4289,9 +5389,9 @@ int main(int pArgumentCount, char* pArguments[])
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::HostRaceSetup)
                 {
                     if (event.key.keysym.sym == SDLK_UP)
-                        gHostSetupSelection = (gHostSetupSelection + 7) % 8;
+                        gHostSetupSelection = (gHostSetupSelection + 8) % 9;
                     else if (event.key.keysym.sym == SDLK_DOWN)
-                        gHostSetupSelection = (gHostSetupSelection + 1) % 8;
+                        gHostSetupSelection = (gHostSetupSelection + 1) % 9;
                     else if (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT)
                     {
                         const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
@@ -4310,19 +5410,22 @@ int main(int pArgumentCount, char* pArguments[])
                             gHostRivalCount = (gHostRivalCount + direction + 8) % 8;
                         else if (gHostSetupSelection == 5)
                             gHostWeaponsAllowed = !gHostWeaponsAllowed;
+                        else if (gHostSetupSelection == 6)
+                            gHostPrivateRoom = !gHostPrivateRoom;
                     }
                     else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
                     {
-                        if (gHostSetupSelection == 6)
+                        if (gHostSetupSelection == 7)
                         {
                             const std::string command = "CREATE OPEN RACE|" + std::to_string(gHostRaceMode)
                                 + "|" + std::to_string(gHostTrackIndex) + "|" + std::to_string(gHostLapCount)
                                 + "|" + std::to_string(gHostPlayerCapacity) + "|"
-                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0");
+                                + std::to_string(gHostRivalCount) + "|" + (gHostWeaponsAllowed ? "1" : "0")
+                                + "|" + (gHostPrivateRoom ? "1" : "0");
                             gHostCreatePending = lobbyClient.SendCommand(command);
                             gLobbyStatus = gHostCreatePending ? "CREATING ROOM" : "SERVER UNAVAILABLE";
                         }
-                        else if (gHostSetupSelection == 7)
+                        else if (gHostSetupSelection == 8)
                             frontScreen = FrontScreen::Multiplayer;
                     }
                 }
@@ -4331,10 +5434,10 @@ int main(int pArgumentCount, char* pArguments[])
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_UP)
-                    settingsSelection = (settingsSelection + 3) % 4;
+                    settingsSelection = (settingsSelection + 5) % 6;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && event.key.keysym.sym == SDLK_DOWN)
-                    settingsSelection = (settingsSelection + 1) % 4;
+                    settingsSelection = (settingsSelection + 1) % 6;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
                 {
@@ -4343,6 +5446,16 @@ int main(int pArgumentCount, char* pArguments[])
                         cameraDistanceSetting = (cameraDistanceSetting + direction + 3) % 3;
                     else if (settingsSelection == 2)
                         audioFeedback.SetEnabled(!audioFeedback.Enabled());
+                    else if (settingsSelection == 3)
+                    {
+                        const double change = direction * 0.1;
+                        audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + change);
+                    }
+                    else if (settingsSelection == 4)
+                    {
+                        const double change = direction * 0.1;
+                        audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + change);
+                    }
                     savePreferences();
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
@@ -4355,14 +5468,14 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::Settings
                          && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER)
-                         && settingsSelection == 3)
+                         && settingsSelection == 5)
                     frontScreen = FrontScreen::Welcome;
                 else if (event.type == SDL_KEYDOWN && frontScreen == FrontScreen::LocalSetup)
                 {
                     if (event.key.keysym.sym == SDLK_UP)
-                        localSetupSelection = (localSetupSelection + 7) % 8;
+                        localSetupSelection = NextLocalSetupOption(raceMode, localSetupSelection, -1);
                     else if (event.key.keysym.sym == SDLK_DOWN)
-                        localSetupSelection = (localSetupSelection + 1) % 8;
+                        localSetupSelection = NextLocalSetupOption(raceMode, localSetupSelection, 1);
                     else if (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT)
                     {
                         const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
@@ -4372,7 +5485,7 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         if (localSetupSelection == 0)
                             startLocalRace();
-                        else if (localSetupSelection == 7)
+                        else if (localSetupSelection == 9)
                             frontScreen = FrontScreen::Welcome;
                     }
                 }
@@ -4407,8 +5520,54 @@ int main(int pArgumentCount, char* pArguments[])
                 }
                 continue;
             }
+            if (pauseMenuOpen && gRemapOpen
+                && (event.type == SDL_KEYDOWN
+                    || (event.type == SDL_CONTROLLERBUTTONDOWN && gRemapCapturing
+                        && gRemapSelection >= kKeyRemapRows)))
+            {
+                const bool padEvent = event.type == SDL_CONTROLLERBUTTONDOWN;
+                const SDL_Keycode key = padEvent ? SDLK_UNKNOWN : event.key.keysym.sym;
+                const int count = kRemapRows;
+                if (gRemapCapturing)
+                {
+                    if (padEvent || key != SDLK_ESCAPE)
+                    {
+                        const bool padRow = gRemapSelection >= kKeyRemapRows;
+                        bool accepted = false;
+                        if (padEvent && padRow)
+                            accepted = gPadBindings.Rebind(
+                                static_cast<PadAction>(gRemapSelection - kKeyRemapRows),
+                                event.cbutton.button);
+                        else if (!padEvent && !padRow)
+                            accepted = gKeyBindings.Rebind(static_cast<BindAction>(gRemapSelection),
+                                                           event.key.keysym.scancode);
+                        if (accepted)
+                            saveBindings();
+                        else
+                            audioFeedback.PlayImpact();
+                    }
+                    gRemapCapturing = false;
+                }
+                else if (key == SDLK_ESCAPE)
+                    gRemapOpen = false;
+                else if (key == SDLK_UP)
+                    gRemapSelection = (gRemapSelection + count - 1) % count;
+                else if (key == SDLK_DOWN)
+                    gRemapSelection = (gRemapSelection + 1) % count;
+                else if (key == SDLK_RETURN || key == SDLK_KP_ENTER)
+                    gRemapCapturing = true;
+                else if (key == SDLK_BACKSPACE)
+                {
+                    gKeyBindings.ResetDefaults();
+                    gPadBindings.ResetDefaults();
+                    saveBindings();
+                }
+                continue;
+            }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
             {
+                gRemapOpen = false;
+                gRemapCapturing = false;
                 pauseMenuOpen = !pauseMenuOpen;
                 pauseMenuSelection = 0;
                 continue;
@@ -4416,17 +5575,90 @@ int main(int pArgumentCount, char* pArguments[])
             if (pauseMenuOpen)
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_UP)
-                    pauseMenuSelection = (pauseMenuSelection + 2) % 3;
+                    pauseMenuSelection = (pauseMenuSelection + 9) % 10;
                 else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_DOWN)
-                    pauseMenuSelection = (pauseMenuSelection + 1) % 3;
+                    pauseMenuSelection = (pauseMenuSelection + 1) % 10;
+                else if (event.type == SDL_KEYDOWN
+                         && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
+                {
+                    if (pauseMenuSelection == 1)
+                    {
+                        steeringAssistEnabled = !steeringAssistEnabled;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 2)
+                    {
+                        brakingAssistEnabled = !brakingAssistEnabled;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 3)
+                    {
+                        const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
+                        cameraDistanceSetting = (cameraDistanceSetting + direction + 3) % 3;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 4)
+                    {
+                        gCameraMotion = NextCameraMotion(
+                            gCameraMotion, event.key.keysym.sym == SDLK_LEFT ? -1 : 1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 5)
+                    {
+                        const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
+                        audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + direction * 0.1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 6)
+                    {
+                        const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
+                        audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + direction * 0.1);
+                        savePreferences();
+                    }
+                }
                 else if (event.type == SDL_KEYDOWN
                          && (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
                 {
                     if (pauseMenuSelection == 0)
                         pauseMenuOpen = false;
                     else if (pauseMenuSelection == 1)
+                    {
+                        steeringAssistEnabled = !steeringAssistEnabled;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 2)
+                    {
+                        brakingAssistEnabled = !brakingAssistEnabled;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 3)
+                    {
+                        cameraDistanceSetting = (cameraDistanceSetting + 1) % 3;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 4)
+                    {
+                        gCameraMotion = NextCameraMotion(gCameraMotion, 1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 5)
+                    {
+                        audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 6)
+                    {
+                        audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 7)
+                    {
+                        gRemapOpen = true;
+                        gRemapCapturing = false;
+                    }
+                    else if (pauseMenuSelection == 8)
                         returnToMainMenu();
-                    else
+                    else if (pauseMenuSelection == 9)
                         running = false;
                 }
                 continue;
@@ -4438,7 +5670,7 @@ int main(int pArgumentCount, char* pArguments[])
             if (event.type == SDL_KEYDOWN && winner != 0 && !continueDriving
                 && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
             {
-                resultSelection = 1 - resultSelection;
+                resultSelection = (resultSelection + (event.key.keysym.sym == SDLK_LEFT ? 2 : 1)) % 3;
                 continue;
             }
             if (event.type == SDL_KEYDOWN
@@ -4447,6 +5679,8 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 if (resultSelection == 0)
                     advanceResult();
+                else if (resultSelection == 1)
+                    returnToSetup();
                 else
                     returnToMainMenu();
                 continue;
@@ -4454,10 +5688,17 @@ int main(int pArgumentCount, char* pArguments[])
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r && winner != 0)
                 advanceResult();
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v)
+            {
                 steeringAssistEnabled = !steeringAssistEnabled;
+                savePreferences();
+            }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_b)
+            {
                 brakingAssistEnabled = !brakingAssistEnabled;
-            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_x && raceStart.Started()
+                savePreferences();
+            }
+            if (event.type == SDL_KEYDOWN && !pauseMenuOpen
+                && event.key.keysym.scancode == gKeyBindings.Key(BindAction::Recover) && raceStart.Started()
                 && winner == 0)
             {
                 const RaceGate& recoveryGate = race.Progress().mNextCheckpoint
@@ -4465,7 +5706,28 @@ int main(int pArgumentCount, char* pArguments[])
                     ? checkpoints[race.Progress().mNextCheckpoint] : finish;
                 HovercraftState recoveryState = hovercraft.State();
                 if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate))
+                {
                     hovercraft.Reset(recoveryState);
+                    recoveredThisRun = true;
+                    if (raceMode == RaceMode::Practice)
+                        practiceGuide.ObserveRecovery();
+                }
+            }
+            if (event.type == SDL_CONTROLLERBUTTONDOWN
+                && event.cbutton.button == gPadBindings.Button(PadAction::Recover) && raceStart.Started()
+                && winner == 0)
+            {
+                const RaceGate& recoveryGate = race.Progress().mNextCheckpoint
+                    < static_cast<int>(checkpoints.size())
+                    ? checkpoints[race.Progress().mNextCheckpoint] : finish;
+                HovercraftState recoveryState = hovercraft.State();
+                if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate))
+                {
+                    hovercraft.Reset(recoveryState);
+                    recoveredThisRun = true;
+                    if (raceMode == RaceMode::Practice)
+                        practiceGuide.ObserveRecovery();
+                }
             }
             if (event.type == SDL_CONTROLLERDEVICEADDED && controller == nullptr
                 && SDL_IsGameController(event.cdevice.which))
@@ -4486,20 +5748,25 @@ int main(int pArgumentCount, char* pArguments[])
         const bool shiftPressed = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
         const bool downPressed = keys[SDL_SCANCODE_DOWN];
         HovercraftInput input;
-        input.mThrottle = (shiftPressed || (!onlineRace && keys[SDL_SCANCODE_W]) ? 1.0 : 0.0)
-            - ((!onlineRace && keys[SDL_SCANCODE_S]) || downPressed ? 1.0 : 0.0);
-        input.mSteering = ((!onlineRace && keys[SDL_SCANCODE_D]) || keys[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0)
-            - ((!onlineRace && keys[SDL_SCANCODE_A]) || keys[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
+        input.mThrottle = (shiftPressed
+                           || (!onlineRace && keys[gKeyBindings.Key(BindAction::Accelerate)]) ? 1.0 : 0.0)
+            - ((!onlineRace && keys[gKeyBindings.Key(BindAction::Brake)]) || downPressed ? 1.0 : 0.0);
+        input.mSteering = ((!onlineRace && keys[gKeyBindings.Key(BindAction::SteerRight)])
+                           || keys[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0)
+            - ((!onlineRace && keys[gKeyBindings.Key(BindAction::SteerLeft)])
+               || keys[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
         input.mJump = keys[SDL_SCANCODE_UP];
-        input.mFire = keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL];
+        input.mFire = keys[gKeyBindings.Key(BindAction::Fire)] || keys[SDL_SCANCODE_RCTRL];
         input.mReverseFacing = shiftPressed && downPressed;
         if (controller != nullptr)
         {
             input.mSteering += ControllerAxis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
             input.mThrottle += SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0;
             input.mThrottle -= SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0;
-            input.mJump = input.mJump || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_B);
-            input.mFire = input.mFire || SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X);
+            input.mJump = input.mJump || SDL_GameControllerGetButton(
+                controller, static_cast<SDL_GameControllerButton>(gPadBindings.Button(PadAction::Jump)));
+            input.mFire = input.mFire || SDL_GameControllerGetButton(
+                controller, static_cast<SDL_GameControllerButton>(gPadBindings.Button(PadAction::Fire)));
         }
         if (frontScreen == FrontScreen::OnlineRace && !gOnlineRaceFinished)
         {
@@ -4535,10 +5802,17 @@ int main(int pArgumentCount, char* pArguments[])
                     ? ApplySteeringAssist(input, hovercraft.State(), simulationGate) : input;
                 if (brakingAssistEnabled)
                     playerInput = ApplyBrakingAssist(playerInput, hovercraft.State(), simulationGate);
+                if (raceMode == RaceMode::Practice)
+                    practiceGuide.ObserveInput(playerInput.mThrottle, playerInput.mSteering,
+                                               playerInput.mJump);
                 hovercraft.Step(playerInput, seconds);
                 activeRecording.Record(playerInput);
                 if (weaponsAllowed && playerInput.mFire && !fireHeld && missile.Fire(hovercraft.State()))
+                {
                     audioFeedback.PlayBoost();
+                    if (raceMode == RaceMode::Practice)
+                        practiceGuide.ObserveFire();
+                }
                 fireHeld = playerInput.mFire;
                 if (ghostActive)
                 {
@@ -4607,6 +5881,7 @@ int main(int pArgumentCount, char* pArguments[])
                     {
                         hovercraft.Reset(playerState);
                         audioFeedback.PlayImpact();
+                        impactVisualUntil = SDL_GetTicks() + 650;
                     }
                     for (int rivalIndex = 0; rivalIndex < kRivalCount; ++rivalIndex)
                     {
@@ -4615,20 +5890,28 @@ int main(int pArgumentCount, char* pArguments[])
                         {
                             rivals[rivalIndex].Reset(rivalState);
                             audioFeedback.PlayImpact();
+                            impactVisualUntil = SDL_GetTicks() + 650;
                         }
                     }
                 }
                 if (BounceOffCourseWall(hovercraft, course) && impactSoundCooldown <= 0.0)
                 {
                     audioFeedback.PlayImpact();
+                    impactVisualUntil = SDL_GetTicks() + 650;
                     impactSoundCooldown = 0.18;
                 }
                 if (ApplyBoostPads(hovercraft, boostPads))
+                {
                     audioFeedback.PlayBoost();
+                    boostVisualUntil = SDL_GetTicks() + 650;
+                    if (raceMode == RaceMode::Practice)
+                        practiceGuide.ObserveBoost();
+                }
                 ApplyRaisedSections(hovercraft, raisedSections);
                 if (ApplyMines(hovercraft, mines) && impactSoundCooldown <= 0.0)
                 {
                     audioFeedback.PlayImpact();
+                    impactVisualUntil = SDL_GetTicks() + 650;
                     impactSoundCooldown = 0.18;
                 }
                 ApplyHazardZones(hovercraft, hazardZones, seconds);
@@ -4640,7 +5923,12 @@ int main(int pArgumentCount, char* pArguments[])
                 const int previousCheckpoint = race.Progress().mNextCheckpoint;
                 race.Update(simulationState.mX, simulationState.mY, seconds);
                 if (race.Progress().mNextCheckpoint != previousCheckpoint)
+                {
                     audioFeedback.PlayCheckpoint();
+                    checkpointVisualUntil = SDL_GetTicks() + 850;
+                    if (raceMode == RaceMode::Practice)
+                        practiceGuide.ObserveCheckpoint();
+                }
                 lapTimer.Update(race.Progress());
                 if (RaceModeUsesRivals(raceMode))
                 {
@@ -4653,6 +5941,18 @@ int main(int pArgumentCount, char* pArguments[])
             }
         }
         const HovercraftState& state = hovercraft.State();
+        // A run that used recovery cannot be replayed from inputs alone, so it never becomes a ghost.
+        if (race.Progress().mFinished && !ghostSubmitted)
+        {
+            ghostSubmitted = true;
+            if (!recoveredThisRun
+                && gGhostLibrary.Submit(selectedTrack.mId, static_cast<int>(playerCraftClass),
+                                        race.Progress().mElapsedSeconds, activeRecording))
+            {
+                gNewGhostBest = true;
+                saveGhosts();
+            }
+        }
         if (winner == 0 && RaceModeHasFinish(raceMode))
         {
             if (race.Progress().mFinished)
@@ -4664,6 +5964,7 @@ int main(int pArgumentCount, char* pArguments[])
                     if (rivalRaces[rivalIndex].Progress().mFinished)
                     {
                         winner = 2;
+                        gRaceWinnerName = LocalRivalName(rivalIndex);
                         break;
                     }
                 }
@@ -4677,17 +5978,22 @@ int main(int pArgumentCount, char* pArguments[])
             raceProgresses.push_back(rivalRaces[rivalIndex].Progress());
             rivalStates.push_back(rivals[rivalIndex].State());
         }
-        const int playerPosition = RaceModeUsesRivals(raceMode)
-            ? CalculateRacePosition(raceProgresses, 0) : 1;
+        std::vector<int> competitorPositions;
+        if (RaceModeUsesRivals(raceMode))
+        {
+            for (int competitorIndex = 0;
+                 competitorIndex < static_cast<int>(raceProgresses.size()); ++competitorIndex)
+                competitorPositions.push_back(CalculateRacePosition(raceProgresses, competitorIndex));
+        }
+        else
+            competitorPositions.push_back(1);
+        const int playerPosition = competitorPositions.front();
         const RaceGate& activeGate = race.Progress().mNextCheckpoint < static_cast<int>(checkpoints.size())
             ? checkpoints[race.Progress().mNextCheckpoint] : finish;
         const bool wrongWay = !race.Progress().mFinished && IsHeadingAwayFromGate(state, activeGate);
         if (raceMode == RaceMode::Championship && winner != 0 && !championship.EventRecorded())
         {
-            std::vector<int> eventPositions;
-            for (int competitorIndex = 0; competitorIndex < static_cast<int>(raceProgresses.size()); ++competitorIndex)
-                eventPositions.push_back(CalculateRacePosition(raceProgresses, competitorIndex));
-            championship.RecordResults(eventPositions);
+            championship.RecordResults(competitorPositions);
         }
         char title[320];
         char championshipStandings[96];
@@ -4715,15 +6021,21 @@ int main(int pArgumentCount, char* pArguments[])
             std::snprintf(championshipOverlayPoints, sizeof(championshipOverlayPoints), "YOU %d",
                           championship.PlayerPoints());
         }
+        if (raceMode == RaceMode::Championship && championship.CompetitorCount() > 0)
+        {
+            std::snprintf(championshipOverlayPoints, sizeof(championshipOverlayPoints),
+                          "EVENT %d OF %d  YOU %d +%d  PLACE %d OF %d",
+                          championship.CurrentEvent() + 1, championship.EventCount(),
+                          championship.PlayerPoints(), championship.LastPointsAwarded(0),
+                          championship.StandingForCompetitor(0), championship.CompetitorCount());
+        }
         if (frontScreen == FrontScreen::OnlineRace)
             std::snprintf(title, sizeof(title), "OpenHover | Online Race | Server tick %u", gOnlineRaceTick);
         else if (frontScreen != FrontScreen::RaceSetup)
             std::snprintf(title, sizeof(title), "OpenHover | Welcome");
         else if (raceStart.Ready())
         {
-            if (showControls)
-                std::snprintf(title, sizeof(title), "OpenHover | R start | T track | M mode | C craft | L laps | 0/1/2 rivals | D difficulty | V/B assists | F1 close");
-            else if (raceMode == RaceMode::Championship)
+            if (raceMode == RaceMode::Championship)
                 std::snprintf(title, sizeof(title), "OpenHover | Championship %d/%d | %s | %d laps | %d rivals | %s AI | %s craft | R start | F1 controls",
                               championship.CurrentEvent() + 1, championship.EventCount(),
                               championshipStandings, targetLaps, rivalCount,
@@ -4754,8 +6066,8 @@ int main(int pArgumentCount, char* pArguments[])
                 std::snprintf(title, sizeof(title), "OpenHover | You finish P%d/%d | %s | Press R to continue",
                               playerPosition, rivalCount + 1, championshipStandings);
             else
-                std::snprintf(title, sizeof(title), "OpenHover | Rival finishes first | You P%d/%d | Press R to restart",
-                              playerPosition, RaceModeUsesRivals(raceMode) ? rivalCount + 1 : 1);
+                std::snprintf(title, sizeof(title), "OpenHover | %s finishes first | You P%d/%d | Press R to restart",
+                              gRaceWinnerName.empty() ? "Rival" : gRaceWinnerName.c_str(), playerPosition, RaceModeUsesRivals(raceMode) ? rivalCount + 1 : 1);
         }
         else if (raceMode == RaceMode::Practice)
             std::snprintf(title, sizeof(title), "OpenHover | %s | Practice | Speed %.1f",
@@ -4788,8 +6100,12 @@ int main(int pArgumentCount, char* pArguments[])
                             frontScreen == FrontScreen::LocalSetup ? localSetupSelection
                                 : (frontScreen == FrontScreen::Settings ? settingsSelection
                                    : (frontScreen == FrontScreen::HostRaceSetup ? gHostSetupSelection : frontSelection)),
-                            cameraDistanceSetting, audioFeedback.Enabled(), trackIndex, targetLaps, rivalCount,
+                            cameraDistanceSetting, audioFeedback.Enabled(),
+                            static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
+                            static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5),
+                            trackIndex, targetLaps, rivalCount,
                             rivalDifficulty, raceMode, weaponsAllowed,
+                            playerCraftClass, steeringAssistEnabled, brakingAssistEnabled,
                             drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
             continue;
@@ -4813,11 +6129,14 @@ int main(int pArgumentCount, char* pArguments[])
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glMatrixMode(GL_PROJECTION);
             glLoadIdentity();
-            SetPerspective(static_cast<double>(drawableWidth) / drawableHeight, cameraState.mSpeed);
+            SetPerspective(static_cast<double>(drawableWidth) / drawableHeight, cameraState.mSpeed,
+                           CameraRig::SpeedZoomScale(gCameraMotion));
             glMatrixMode(GL_MODELVIEW);
             glLoadIdentity();
             const double cameraDistances[] = {4.6, 5.8, 7.4};
-            SetChaseCamera(cameraState, cameraDistances[cameraDistanceSetting]);
+            SetChaseCamera(cameraState, cameraDistances[cameraDistanceSetting],
+                           gCameraRig.Update(cameraState.mHeading, frameSeconds, gCameraMotion),
+                           gCameraRig.UpdateRise(std::fmax(0.0, cameraState.mHeight - 1.2), frameSeconds, gCameraMotion));
             const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
             glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
             DrawCourseGrid(cameraState);
@@ -4866,10 +6185,17 @@ int main(int pArgumentCount, char* pArguments[])
                 const RaceGate& onlineActiveGate = localRacer->mProgress.mNextCheckpoint
                     < static_cast<int>(checkpoints.size())
                     ? checkpoints[localRacer->mProgress.mNextCheckpoint] : selectedTrack.Finish();
+                std::vector<HovercraftState> onlineRivalStates;
+                for (const OnlineRacerView& racer : gOnlineRacers)
+                {
+                    if (racer.mPlayerId != gLobbyPlayerId)
+                        onlineRivalStates.push_back(InterpolatedOnlineState(racer));
+                }
                 const bool onlineWrongWay = !localRacer->mProgress.mFinished
                     && IsHeadingAwayFromGate(localRacer->mState, onlineActiveGate);
                 DrawOnlineHud(*localRacer, static_cast<int>(gOnlineRacers.size()), gOnlineTargetLaps,
-                              onlineWrongWay, drawableWidth, drawableHeight);
+                              onlineActiveGate, courseWaypoints, onlineRivalStates, onlineWrongWay,
+                              drawableWidth, drawableHeight);
             }
             DrawOnlineChat(drawableWidth, drawableHeight);
             SDL_GL_SwapWindow(window);
@@ -4883,11 +6209,14 @@ int main(int pArgumentCount, char* pArguments[])
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
-        SetPerspective(static_cast<double>(drawableWidth) / drawableHeight, state.mSpeed);
+        SetPerspective(static_cast<double>(drawableWidth) / drawableHeight, state.mSpeed,
+                       CameraRig::SpeedZoomScale(gCameraMotion));
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         const double cameraDistances[] = {4.6, 5.8, 7.4};
-        SetChaseCamera(state, cameraDistances[cameraDistanceSetting]);
+        SetChaseCamera(state, cameraDistances[cameraDistanceSetting],
+                       gCameraRig.Update(state.mHeading, frameSeconds, gCameraMotion),
+                           gCameraRig.UpdateRise(std::fmax(0.0, state.mHeight - 1.2), frameSeconds, gCameraMotion));
         const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
         glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
         DrawCourseGrid(state);
@@ -4920,14 +6249,26 @@ int main(int pArgumentCount, char* pArguments[])
         std::vector<RaceProgress> rivalProgresses(raceProgresses.begin() + 1, raceProgresses.end());
         DrawHud(race.Progress(), race.TargetLaps(), rivalProgresses, state, rivalStates, activeGate,
             courseWaypoints,
-            RaceModeUsesRivals(raceMode), wrongWay, winner, playerPosition,
+            RaceModeUsesRivals(raceMode), wrongWay,
+            SDL_GetTicks() < checkpointVisualUntil, SDL_GetTicks() < boostVisualUntil,
+            SDL_GetTicks() < impactVisualUntil, winner, playerPosition,
             RaceModeUsesRivals(raceMode) ? rivalCount + 1 : 1,
-            raceMode == RaceMode::Championship, raceStart.LightsLit(), raceStart.CountdownActive(),
+            competitorPositions,
+            raceMode == RaceMode::Championship, championship.Complete(),
+            championship.CurrentEvent() + 1 >= championship.EventCount(),
+            raceStart.LightsLit(), raceStart.CountdownActive(),
             !continueDriving,
-            championshipOverlayPoints, race.Progress().mElapsedSeconds, lapTimer.Timing(), missile,
+            championshipOverlayPoints, race.Progress().mElapsedSeconds, lapTimer.Timing(),
+            playerCraftClass, missile,
             weaponsAllowed, pauseMenuOpen, pauseMenuSelection,
+            controller != nullptr, steeringAssistEnabled, brakingAssistEnabled,
+            cameraDistanceSetting,
+            static_cast<int>(audioFeedback.MenuVolume() * 100.0 + 0.5),
+            static_cast<int>(audioFeedback.RaceVolume() * 100.0 + 0.5),
             resultSelection,
             drawableWidth, drawableHeight);
+        if (raceMode == RaceMode::Practice && !pauseMenuOpen)
+            DrawPracticeGuide(practiceGuide, controller != nullptr, drawableWidth, drawableHeight);
         SDL_GL_SwapWindow(window);
     }
 

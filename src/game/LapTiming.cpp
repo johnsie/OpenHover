@@ -17,8 +17,12 @@ void LapTimer::Update(const RaceProgress& pProgress)
     {
         RecordSplit(mObservedNextCheckpoint, pProgress.mElapsedSeconds);
         mTiming.mLastSeconds = pProgress.mElapsedSeconds - mLapStartSeconds;
+        const double previousBestSeconds = mTiming.mBestSeconds;
         if (mTiming.mBestSeconds == 0.0 || mTiming.mLastSeconds < mTiming.mBestSeconds)
             mTiming.mBestSeconds = mTiming.mLastSeconds;
+        mTiming.mLastImprovementSeconds = previousBestSeconds > 0.0
+            && mTiming.mLastSeconds < previousBestSeconds
+            ? previousBestSeconds - mTiming.mLastSeconds : 0.0;
         mLapStartSeconds = pProgress.mElapsedSeconds;
         mObservedLaps = pProgress.mCompletedLaps;
         mObservedNextCheckpoint = 0;

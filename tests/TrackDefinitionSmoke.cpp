@@ -84,14 +84,58 @@ int main()
         std::cerr << "invalid track was accepted\n";
         return 1;
     }
-    invalid.mWaypoints = {{0.0, 0.0, 1.0}, {1.0, 0.0, 1.0}, {1.0, 1.0, 1.0}, {0.0, 1.0, 1.0}};
-    invalid.mCheckpoints = {{1.0, 0.0, 1.0}, {1.0, 1.0, 1.0},
-                            {0.0, 1.0, 1.0}, {0.0, 0.0, 1.0}};
-    invalid.mRoadHalfWidth = 1.0;
+    invalid.mWaypoints = {{0.0, 0.0, 6.0}, {100.0, 0.0, 6.0}, {100.0, 100.0, 6.0}, {0.0, 100.0, 6.0}};
+    invalid.mCheckpoints = {{100.0, 0.0, 6.0}, {100.0, 100.0, 6.0},
+                            {0.0, 100.0, 6.0}, {0.0, 0.0, 6.0}};
+    invalid.mRoadHalfWidth = 6.0;
     invalid.mProvenance = {"OpenHover contributors", "CC BY 4.0", "Original test data"};
     if (!invalid.Validate().empty())
     {
         std::cerr << "valid provenance metadata was rejected\n";
+        return 1;
+    }
+    TrackDefinition offRoute = invalid;
+    offRoute.mCheckpoints[1] = {400.0, 400.0, 6.0};
+    TrackDefinition reordered = invalid;
+    std::swap(reordered.mCheckpoints[0], reordered.mCheckpoints[2]);
+    TrackDefinition duplicate = invalid;
+    duplicate.mWaypoints[1] = duplicate.mWaypoints[0];
+    if (offRoute.Validate().empty() || reordered.Validate().empty() || duplicate.Validate().empty())
+    {
+        std::cerr << "off-route, out-of-order, or degenerate route was accepted\n";
+        return 1;
+    }
+    TrackDefinition crossing = invalid;
+    crossing.mWaypoints = {{0.0, 0.0, 6.0}, {100.0, 100.0, 6.0}, {100.0, 0.0, 6.0}, {0.0, 100.0, 6.0}};
+    crossing.mCheckpoints = {{100.0, 100.0, 6.0}, {100.0, 0.0, 6.0}, {0.0, 100.0, 6.0}, {0.0, 0.0, 6.0}};
+    TrackDefinition sealed = crossing;
+    sealed.mRaisedSections = {{50.0, 50.0, 16.0, 6.0, 0.0, 1.5, true}};
+    if (crossing.Validate().empty() || !sealed.Validate().empty())
+    {
+        std::cerr << "unsealed crossing accepted or sealed crossing rejected: "
+                  << sealed.Validate() << "\n";
+        return 1;
+    }
+    TrackDefinition narrowStart = invalid;
+    narrowStart.mRoadHalfWidth = 2.0; // starting grid is 3.2 either side of the centreline
+    for (RaceGate& gate : narrowStart.mWaypoints)
+        gate.mRadius = 6.0;
+    TrackDefinition mineOnGrid = invalid;
+    mineOnGrid.mMines = {{0.0, 1.0, 1.0}};
+    if (narrowStart.Validate().empty() || mineOnGrid.Validate().empty())
+    {
+        std::cerr << "unsafe starting grid was accepted\n";
+        return 1;
+    }
+    TrackDefinition strayPad = invalid;
+    strayPad.mBoostPads = {{300.0, 300.0, 1.0}};
+    TrackDefinition strayMine = invalid;
+    strayMine.mMines = {{-300.0, 0.0, 1.0}};
+    TrackDefinition strayHazard = invalid;
+    strayHazard.mHazardZones = {{0.0, 300.0, 1.0, 1.0}};
+    if (strayPad.Validate().empty() || strayMine.Validate().empty() || strayHazard.Validate().empty())
+    {
+        std::cerr << "off-road pad, mine, or hazard was accepted\n";
         return 1;
     }
     invalid.mProvenance.mAssetOrigin.clear();

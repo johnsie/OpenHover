@@ -10,6 +10,40 @@
 using LobbyPlayerId = unsigned int;
 using LobbyRoomId = unsigned int;
 
+bool IsValidLobbyNameCharacter(char pCharacter);
+bool IsValidLobbyDisplayName(const std::string& pDisplayName);
+bool IsValidLobbyReportReason(const std::string& pReason);
+
+class LobbyChatRateLimiter
+{
+public:
+    bool Allow(double pNowSeconds);
+
+private:
+    std::vector<double> mAcceptedMessageTimes;
+};
+
+class LobbyMuteList
+{
+public:
+    void Mute(LobbyPlayerId pPlayerId);
+    void Unmute(LobbyPlayerId pPlayerId);
+    bool IsMuted(LobbyPlayerId pPlayerId) const;
+    void Clear();
+
+private:
+    std::vector<LobbyPlayerId> mPlayerIds;
+};
+
+class LobbyReportRateLimiter
+{
+public:
+    bool Allow(double pNowSeconds);
+
+private:
+    std::vector<double> mAcceptedReportTimes;
+};
+
 struct LobbyRaceSettings
 {
     RaceMode mRaceMode = RaceMode::SingleRace;
@@ -39,7 +73,10 @@ struct LobbyRoom
     LobbyPlayerId mHostId = 0;
     LobbyRaceSettings mSettings;
     std::vector<LobbyPlayerId> mPlayerIds;
+    std::vector<LobbyPlayerId> mReadyPlayerIds;
     bool mRaceRunning = false;
+    bool mPrivate = false;
+    std::string mJoinCode;
 };
 
 class Lobby
@@ -50,9 +87,12 @@ public:
 
     bool SendChat(LobbyPlayerId pSenderId, const std::string& pText);
     bool CreateRoom(LobbyPlayerId pHostId, const std::string& pRoomName,
-                    const LobbyRaceSettings& pSettings, LobbyRoomId& pRoomId);
+                    const LobbyRaceSettings& pSettings, LobbyRoomId& pRoomId,
+                    bool pPrivate = false, const std::string& pJoinCode = "");
     bool JoinRoom(LobbyPlayerId pPlayerId, LobbyRoomId pRoomId);
     bool LeaveRoom(LobbyPlayerId pPlayerId);
+    bool SetReady(LobbyPlayerId pPlayerId, bool pReady);
+    bool AllPlayersReady(LobbyRoomId pRoomId) const;
     bool UpdateRoomSettings(LobbyPlayerId pHostId, LobbyRoomId pRoomId,
                             const LobbyRaceSettings& pSettings);
     bool StartRace(LobbyPlayerId pHostId, LobbyRoomId pRoomId);

@@ -45,33 +45,51 @@ void AudioFeedback::SetEnabled(bool pEnabled)
         SDL_ClearQueuedAudio(mDevice);
 }
 
+void AudioFeedback::SetVolume(double pVolume)
+{
+    SetMenuVolume(pVolume);
+    SetRaceVolume(pVolume);
+}
+
+void AudioFeedback::SetMenuVolume(double pVolume)
+{
+    mMenuVolume = pVolume < 0.0 ? 0.0 : pVolume > 1.0 ? 1.0 : pVolume;
+}
+
+void AudioFeedback::SetRaceVolume(double pVolume)
+{
+    mRaceVolume = pVolume < 0.0 ? 0.0 : pVolume > 1.0 ? 1.0 : pVolume;
+    if (mMenuVolume == 0.0 && mRaceVolume == 0.0 && mDevice != 0)
+        SDL_ClearQueuedAudio(mDevice);
+}
+
 void AudioFeedback::PlayMenuMove()
 {
-    QueueTone(680.0, 780.0, 0.04, 0.12);
+    QueueTone(680.0, 780.0, 0.04, 0.12, mMenuVolume);
 }
 
 void AudioFeedback::PlayMenuConfirm()
 {
-    QueueTone(440.0, 880.0, 0.09, 0.16);
+    QueueTone(440.0, 880.0, 0.09, 0.16, mMenuVolume);
 }
 
 void AudioFeedback::PlayBoost()
 {
-    QueueTone(160.0, 440.0, 0.12, 0.18);
+    QueueTone(160.0, 440.0, 0.12, 0.18, mRaceVolume);
 }
 
 void AudioFeedback::PlayImpact()
 {
-    QueueTone(150.0, 70.0, 0.10, 0.18);
+    QueueTone(150.0, 70.0, 0.10, 0.18, mRaceVolume);
 }
 
 void AudioFeedback::PlayCheckpoint()
 {
-    QueueTone(660.0, 990.0, 0.14, 0.16);
+    QueueTone(660.0, 990.0, 0.14, 0.16, mRaceVolume);
 }
 
 void AudioFeedback::QueueTone(double pStartFrequency, double pEndFrequency, double pSeconds,
-                               double pVolume)
+                               double pVolume, double pMixVolume)
 {
     if (!mEnabled || mDevice == 0
         || SDL_GetQueuedAudioSize(mDevice) > kSampleRate * sizeof(float) / 2)
@@ -86,7 +104,7 @@ void AudioFeedback::QueueTone(double pStartFrequency, double pEndFrequency, doub
         const double frequency = pStartFrequency + (pEndFrequency - pStartFrequency) * progress;
         const double envelope = std::sin(kTau * progress * 0.5);
         phase += kTau * frequency / kSampleRate;
-        samples[sample] = static_cast<float>(std::sin(phase) * envelope * pVolume);
+        samples[sample] = static_cast<float>(std::sin(phase) * envelope * pVolume * pMixVolume);
     }
     SDL_QueueAudio(mDevice, samples.data(), static_cast<Uint32>(samples.size() * sizeof(float)));
 }

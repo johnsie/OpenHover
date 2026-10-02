@@ -21,5 +21,12 @@ int main()
         std::cerr << "craft class selection did not cycle\n";
         return 1;
     }
+    if (CraftClassDescription(CraftClass::Balanced)[0] == '\0'
+        || CraftClassDescription(CraftClass::Sprint)[0] == '\0'
+        || CraftClassDescription(CraftClass::Control)[0] == '\0')
+    {
+        std::cerr << "craft classes did not provide handling descriptions\n";
+        return 1;
+    }
     return 0;
 }

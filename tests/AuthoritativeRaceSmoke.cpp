@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "AuthoritativeRace.h"
 #include "Course.h"
+#include "RivalNames.h"
 #include "TrackDefinition.h"
 
 #include <iostream>
+#include <set>
 #include <vector>
 
 int main()
@@ -79,6 +81,26 @@ int main()
     {
         std::cerr << "authoritative race did not create configured AI rivals\n";
         return 1;
+    }
+    for (int attempt = 0; attempt < 50; ++attempt)
+    {
+        AuthoritativeRace fullGrid;
+        if (!fullGrid.Start({11}, 0, 3, false, 7, RaceMode::SingleRace))
+        {
+            std::cerr << "authoritative race did not start a full rival grid\n";
+            return 1;
+        }
+        std::set<LobbyPlayerId> rivalIds;
+        for (const RaceRacerSnapshot& racer : fullGrid.Snapshot().mRacers)
+        {
+            if (racer.mPlayerId >= 1000000)
+                rivalIds.insert(racer.mPlayerId);
+        }
+        if (rivalIds.size() != 7 || *rivalIds.rbegin() >= 1000000 + RivalNamePoolSize())
+        {
+            std::cerr << "authoritative rivals must carry distinct rival-name ids\n";
+            return 1;
+        }
     }
     return 0;
 }

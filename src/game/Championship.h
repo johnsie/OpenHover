@@ -19,6 +19,7 @@ public:
     int PlayerPoints() const { return mPlayerPoints; }
     int CompetitorCount() const { return mCompetitorCount; }
     int CompetitorPoints(int pCompetitorIndex) const;
+    int LastPointsAwarded(int pCompetitorIndex) const;
     int StandingForCompetitor(int pCompetitorIndex) const;
     bool EventRecorded() const { return mEventRecorded; }
     bool Complete() const { return mComplete; }
@@ -29,6 +30,7 @@ private:
     int mPlayerPoints = 0;
     int mCompetitorCount = 0;
     std::vector<int> mCompetitorPoints;
+    std::vector<int> mLastPointsAwarded;
     bool mEventRecorded = false;
     bool mComplete = false;
 };

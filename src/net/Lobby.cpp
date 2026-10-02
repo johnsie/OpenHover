@@ -9,11 +9,91 @@ const std::size_t kMaximumDisplayNameLength = 24;
 const std::size_t kMaximumRoomNameLength = 40;
 const std::size_t kMaximumChatMessageLength = 256;
 const std::size_t kMaximumChatHistory = 100;
+const std::size_t kMaximumChatMessagesPerWindow = 4;
+const double kChatRateLimitWindowSeconds = 2.0;
+const std::size_t kMaximumReportsPerWindow = 2;
+const double kReportRateLimitWindowSeconds = 60.0;
+}
+
+bool IsValidLobbyNameCharacter(char pCharacter)
+{
+    return (pCharacter >= 'A' && pCharacter <= 'Z')
+        || (pCharacter >= 'a' && pCharacter <= 'z')
+        || (pCharacter >= '0' && pCharacter <= '9')
+        || pCharacter == '_' || pCharacter == '-';
+}
+
+bool IsValidLobbyDisplayName(const std::string& pDisplayName)
+{
+    if (pDisplayName.empty() || pDisplayName.size() > kMaximumDisplayNameLength)
+        return false;
+    return std::all_of(pDisplayName.begin(), pDisplayName.end(), IsValidLobbyNameCharacter);
+}
+
+bool IsValidLobbyReportReason(const std::string& pReason)
+{
+    if (pReason.empty() || pReason.size() > 120)
+        return false;
+    return std::all_of(pReason.begin(), pReason.end(), [](char pCharacter)
+    {
+        return pCharacter >= 32 && pCharacter <= 126 && pCharacter != '|';
+    });
+}
+
+bool LobbyChatRateLimiter::Allow(double pNowSeconds)
+{
+    mAcceptedMessageTimes.erase(
+        std::remove_if(mAcceptedMessageTimes.begin(), mAcceptedMessageTimes.end(),
+                       [pNowSeconds](double pMessageTime)
+                       {
+                           return pNowSeconds - pMessageTime >= kChatRateLimitWindowSeconds;
+                       }),
+        mAcceptedMessageTimes.end());
+    if (mAcceptedMessageTimes.size() >= kMaximumChatMessagesPerWindow)
+        return false;
+    mAcceptedMessageTimes.push_back(pNowSeconds);
+    return true;
+}
+
+void LobbyMuteList::Mute(LobbyPlayerId pPlayerId)
+{
+    if (pPlayerId != 0 && !IsMuted(pPlayerId))
+        mPlayerIds.push_back(pPlayerId);
+}
+
+void LobbyMuteList::Unmute(LobbyPlayerId pPlayerId)
+{
+    mPlayerIds.erase(std::remove(mPlayerIds.begin(), mPlayerIds.end(), pPlayerId), mPlayerIds.end());
+}
+
+bool LobbyMuteList::IsMuted(LobbyPlayerId pPlayerId) const
+{
+    return std::find(mPlayerIds.begin(), mPlayerIds.end(), pPlayerId) != mPlayerIds.end();
+}
+
+void LobbyMuteList::Clear()
+{
+    mPlayerIds.clear();
+}
+
+bool LobbyReportRateLimiter::Allow(double pNowSeconds)
+{
+    mAcceptedReportTimes.erase(
+        std::remove_if(mAcceptedReportTimes.begin(), mAcceptedReportTimes.end(),
+                       [pNowSeconds](double pReportTime)
+                       {
+                           return pNowSeconds - pReportTime >= kReportRateLimitWindowSeconds;
+                       }),
+        mAcceptedReportTimes.end());
+    if (mAcceptedReportTimes.size() >= kMaximumReportsPerWindow)
+        return false;
+    mAcceptedReportTimes.push_back(pNowSeconds);
+    return true;
 }
 
 bool Lobby::Connect(const std::string& pDisplayName, LobbyPlayerId& pPlayerId)
 {
-    if (pDisplayName.empty() || pDisplayName.size() > kMaximumDisplayNameLength)
+    if (!IsValidLobbyDisplayName(pDisplayName))
         return false;
     for (const LobbyPlayer& player : mPlayers)
     {
@@ -50,10 +130,12 @@ bool Lobby::SendChat(LobbyPlayerId pSenderId, const std::string& pText)
 }
 
 bool Lobby::CreateRoom(LobbyPlayerId pHostId, const std::string& pRoomName,
-                       const LobbyRaceSettings& pSettings, LobbyRoomId& pRoomId)
+                       const LobbyRaceSettings& pSettings, LobbyRoomId& pRoomId,
+                       bool pPrivate, const std::string& pJoinCode)
 {
     if (!HasPlayer(pHostId) || RoomForPlayer(pHostId) != 0 || pRoomName.empty()
-        || pRoomName.size() > kMaximumRoomNameLength || !IsValidSettings(pSettings))
+        || pRoomName.size() > kMaximumRoomNameLength || !IsValidSettings(pSettings)
+        || (pPrivate && pJoinCode.empty()))
         return false;
     pRoomId = mNextRoomId++;
     LobbyRoom room;
@@ -61,7 +143,10 @@ bool Lobby::CreateRoom(LobbyPlayerId pHostId, const std::string& pRoomName,
     room.mName = pRoomName;
     room.mHostId = pHostId;
     room.mSettings = pSettings;
+    room.mPrivate = pPrivate;
+    room.mJoinCode = pPrivate ? pJoinCode : "";
     room.mPlayerIds.push_back(pHostId);
+    room.mReadyPlayerIds.push_back(pHostId);
     mRooms.push_back(room);
     return true;
 }
@@ -85,6 +170,9 @@ bool Lobby::LeaveRoom(LobbyPlayerId pPlayerId)
         return false;
     room->mPlayerIds.erase(std::remove(room->mPlayerIds.begin(), room->mPlayerIds.end(), pPlayerId),
                            room->mPlayerIds.end());
+    room->mReadyPlayerIds.erase(
+        std::remove(room->mReadyPlayerIds.begin(), room->mReadyPlayerIds.end(), pPlayerId),
+        room->mReadyPlayerIds.end());
     if (room->mPlayerIds.empty())
     {
         mRooms.erase(std::remove_if(mRooms.begin(), mRooms.end(),
@@ -95,8 +183,37 @@ bool Lobby::LeaveRoom(LobbyPlayerId pPlayerId)
                      mRooms.end());
     }
     else if (room->mHostId == pPlayerId)
+    {
         room->mHostId = room->mPlayerIds.front();
+        if (std::find(room->mReadyPlayerIds.begin(), room->mReadyPlayerIds.end(), room->mHostId)
+            == room->mReadyPlayerIds.end())
+            room->mReadyPlayerIds.push_back(room->mHostId);
+    }
     return true;
+}
+
+bool Lobby::SetReady(LobbyPlayerId pPlayerId, bool pReady)
+{
+    LobbyRoom* room = FindRoom(RoomForPlayer(pPlayerId));
+    if (room == nullptr || room->mRaceRunning || room->mHostId == pPlayerId)
+        return false;
+    const std::vector<LobbyPlayerId>::iterator ready = std::find(
+        room->mReadyPlayerIds.begin(), room->mReadyPlayerIds.end(), pPlayerId);
+    if (pReady && ready == room->mReadyPlayerIds.end())
+        room->mReadyPlayerIds.push_back(pPlayerId);
+    else if (!pReady && ready != room->mReadyPlayerIds.end())
+        room->mReadyPlayerIds.erase(ready);
+    return true;
+}
+
+bool Lobby::AllPlayersReady(LobbyRoomId pRoomId) const
+{
+    for (const LobbyRoom& room : mRooms)
+    {
+        if (room.mId == pRoomId)
+            return room.mReadyPlayerIds.size() == room.mPlayerIds.size();
+    }
+    return false;
 }
 
 bool Lobby::UpdateRoomSettings(LobbyPlayerId pHostId, LobbyRoomId pRoomId,
@@ -107,13 +224,16 @@ bool Lobby::UpdateRoomSettings(LobbyPlayerId pHostId, LobbyRoomId pRoomId,
         || !IsValidSettings(pSettings) || static_cast<int>(room->mPlayerIds.size()) > pSettings.mPlayerCapacity)
         return false;
     room->mSettings = pSettings;
+    room->mReadyPlayerIds.clear();
+    room->mReadyPlayerIds.push_back(room->mHostId);
     return true;
 }
 
 bool Lobby::StartRace(LobbyPlayerId pHostId, LobbyRoomId pRoomId)
 {
     LobbyRoom* room = FindRoom(pRoomId);
-    if (room == nullptr || room->mRaceRunning || room->mHostId != pHostId)
+    if (room == nullptr || room->mRaceRunning || room->mHostId != pHostId
+        || !AllPlayersReady(pRoomId))
         return false;
     room->mRaceRunning = true;
     return true;

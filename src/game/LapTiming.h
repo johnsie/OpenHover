@@ -11,6 +11,7 @@ struct LapTiming
     double mCurrentSeconds = 0.0;
     double mLastSeconds = 0.0;
     double mBestSeconds = 0.0;
+    double mLastImprovementSeconds = 0.0;
     double mCurrentSplitSeconds = 0.0;
     double mLastSplitSeconds = 0.0;
     double mBestSplitSeconds = 0.0;

@@ -13,6 +13,7 @@ enum class CraftClass
 
 CraftClass NextCraftClass(CraftClass pCraftClass);
 const char* CraftClassName(CraftClass pCraftClass);
+const char* CraftClassDescription(CraftClass pCraftClass);
 HovercraftTuning CraftClassTuning(CraftClass pCraftClass);
 
 #endif

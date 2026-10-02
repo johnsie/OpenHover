@@ -43,6 +43,64 @@ RaceGate GateBeforeTurn(const RaceGate& pGate, const std::vector<RaceGate>& pWay
     result.mRadius = std::max(result.mRadius, pRoadHalfWidth + 0.5);
     return result;
 }
+
+struct RoutePoint
+{
+    double mDistanceFromRoute = 0.0;
+    double mProgress = 0.0; // distance along the closed route from the finish waypoint
+};
+
+RoutePoint NearestRoutePoint(const std::vector<RaceGate>& pWaypoints, double pX, double pY)
+{
+    RoutePoint best;
+    best.mDistanceFromRoute = -1.0;
+    double travelled = 0.0;
+    for (std::size_t index = 0; index < pWaypoints.size(); ++index)
+    {
+        const RaceGate& start = pWaypoints[index];
+        const RaceGate& end = pWaypoints[(index + 1) % pWaypoints.size()];
+        const double segmentX = end.mX - start.mX;
+        const double segmentY = end.mY - start.mY;
+        const double length = std::sqrt(segmentX * segmentX + segmentY * segmentY);
+        double fraction = 0.0;
+        if (length > 0.0)
+        {
+            fraction = ((pX - start.mX) * segmentX + (pY - start.mY) * segmentY) / (length * length);
+            fraction = std::max(0.0, std::min(1.0, fraction));
+        }
+        const double nearestX = start.mX + segmentX * fraction;
+        const double nearestY = start.mY + segmentY * fraction;
+        const double distance = std::sqrt((pX - nearestX) * (pX - nearestX)
+                                          + (pY - nearestY) * (pY - nearestY));
+        if (best.mDistanceFromRoute < 0.0 || distance < best.mDistanceFromRoute)
+        {
+            best.mDistanceFromRoute = distance;
+            best.mProgress = travelled + length * fraction;
+        }
+        travelled += length;
+    }
+    return best;
+}
+}
+
+// Intersection of segments a-b and c-d, if they cross.
+bool SegmentCrossing(const RaceGate& pA, const RaceGate& pB, const RaceGate& pC,
+                     const RaceGate& pD, double& pX, double& pY)
+{
+    const double rX = pB.mX - pA.mX;
+    const double rY = pB.mY - pA.mY;
+    const double sX = pD.mX - pC.mX;
+    const double sY = pD.mY - pC.mY;
+    const double denominator = rX * sY - rY * sX;
+    if (std::fabs(denominator) < 1e-9)
+        return false;
+    const double t = ((pC.mX - pA.mX) * sY - (pC.mY - pA.mY) * sX) / denominator;
+    const double u = ((pC.mX - pA.mX) * rY - (pC.mY - pA.mY) * rX) / denominator;
+    if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0)
+        return false;
+    pX = pA.mX + t * rX;
+    pY = pA.mY + t * rY;
+    return true;
 }
 
 std::string TrackDefinition::Validate() const
@@ -102,6 +160,107 @@ std::string TrackDefinition::Validate() const
             return "raised section dimensions and clearance must be positive";
         }
     }
+
+    for (std::size_t index = 0; index < mWaypoints.size(); ++index)
+    {
+        const RaceGate& next = mWaypoints[(index + 1) % mWaypoints.size()];
+        if (std::fabs(mWaypoints[index].mX - next.mX) + std::fabs(mWaypoints[index].mY - next.mY)
+            < 0.5)
+            return "consecutive route waypoints must be distinct";
+    }
+    double routeLength = 0.0;
+    for (std::size_t index = 0; index < mWaypoints.size(); ++index)
+    {
+        const RaceGate& next = mWaypoints[(index + 1) % mWaypoints.size()];
+        routeLength += std::hypot(next.mX - mWaypoints[index].mX, next.mY - mWaypoints[index].mY);
+    }
+    double previousProgress = 0.0;
+    for (const RaceGate& checkpoint : mCheckpoints)
+    {
+        const RoutePoint point = NearestRoutePoint(mWaypoints, checkpoint.mX, checkpoint.mY);
+        if (point.mDistanceFromRoute > mRoadHalfWidth)
+            return "every checkpoint must lie on the route";
+        // A checkpoint on the finish point itself is the end of the lap, not its start.
+        const double progress = point.mProgress < 0.001 ? routeLength : point.mProgress;
+        if (progress + 0.001 < previousProgress)
+            return "checkpoints must follow the route in driving order";
+        previousProgress = progress;
+    }
+    // Where the route crosses itself, one road must pass over the other on a driveable raised
+    // section; otherwise the crossing is an ambiguous junction that lap validation cannot trust.
+    const std::size_t waypointCount = mWaypoints.size();
+    for (std::size_t first = 0; first < waypointCount; ++first)
+    {
+        for (std::size_t second = first + 2; second < waypointCount; ++second)
+        {
+            if (first == 0 && second == waypointCount - 1)
+                continue; // adjacent through the closing segment
+            double crossX = 0.0;
+            double crossY = 0.0;
+            if (!SegmentCrossing(mWaypoints[first], mWaypoints[(first + 1) % waypointCount],
+                                 mWaypoints[second], mWaypoints[(second + 1) % waypointCount],
+                                 crossX, crossY))
+                continue;
+            bool sealed = false;
+            for (const RaisedSection& section : mRaisedSections)
+            {
+                if (section.mDriveable
+                    && std::hypot(section.mX - crossX, section.mY - crossY) <= section.mHalfLength)
+                    sealed = true;
+            }
+            if (!sealed)
+                return "every route crossing must be sealed by a driveable raised section";
+        }
+    }
+    // The starting grid (three abreast, three rows, as laid out by the race start) must be on the
+    // road and clear of mines and hazard zones.
+    {
+        const RaceGate finish = Finish();
+        double forwardX = mWaypoints.front().mX - finish.mX;
+        double forwardY = mWaypoints.front().mY - finish.mY;
+        const double forwardLength = std::hypot(forwardX, forwardY);
+        if (forwardLength > 0.0)
+        {
+            forwardX /= forwardLength;
+            forwardY /= forwardLength;
+        }
+        for (int slot = 0; slot < 9; ++slot)
+        {
+            const double ahead = 7.0 - slot / 3 * 4.0;
+            const double aside = (slot % 3 - 1) * 3.2;
+            const double x = finish.mX + forwardX * ahead - forwardY * aside;
+            const double y = finish.mY + forwardY * ahead + forwardX * aside;
+            if (NearestRoutePoint(mWaypoints, x, y).mDistanceFromRoute > mRoadHalfWidth)
+                return "the starting grid must lie on the road";
+            for (const Mine& mine : mMines)
+            {
+                if (std::hypot(mine.mX - x, mine.mY - y) < mine.mRadius + 2.0)
+                    return "the starting grid must be clear of mines";
+            }
+            for (const HazardZone& hazardZone : mHazardZones)
+            {
+                if (std::hypot(hazardZone.mX - x, hazardZone.mY - y) < hazardZone.mRadius + 2.0)
+                    return "the starting grid must be clear of hazard zones";
+            }
+        }
+    }
+    for (const BoostPad& boostPad : mBoostPads)
+    {
+        if (NearestRoutePoint(mWaypoints, boostPad.mX, boostPad.mY).mDistanceFromRoute
+            > mRoadHalfWidth)
+            return "every boost pad must lie on the road";
+    }
+    for (const HazardZone& hazardZone : mHazardZones)
+    {
+        if (NearestRoutePoint(mWaypoints, hazardZone.mX, hazardZone.mY).mDistanceFromRoute
+            > mRoadHalfWidth)
+            return "every hazard zone must lie on the road";
+    }
+    for (const Mine& mine : mMines)
+    {
+        if (NearestRoutePoint(mWaypoints, mine.mX, mine.mY).mDistanceFromRoute > mRoadHalfWidth)
+            return "every mine must lie on the road";
+    }
     return std::string();
 }
 
@@ -131,18 +290,23 @@ const std::vector<TrackDefinition>& BuiltInTracks()
         harborLoop.mProvenance = {"OpenHover contributors", "CC BY 4.0",
                       "Original coordinates and procedural runtime materials"};
         harborLoop.mRoadHalfWidth = 7.8;
-           harborLoop.mWaypoints = {{-52.0, -92.0, 5.0}, {-52.0, -48.0, 5.0},
-               {-52.0, 0.0, 5.0}, {-52.0, 48.0, 5.0}, {-52.0, 96.0, 5.0},
-               {-16.0, 96.0, 5.0}, {-16.0, 54.0, 5.0}, {0.0, 26.0, 5.0},
-               {16.0, 54.0, 5.0}, {16.0, 96.0, 5.0}, {52.0, 96.0, 5.0},
-               {52.0, 48.0, 5.0}, {52.0, 0.0, 5.0}, {52.0, -48.0, 5.0},
-               {52.0, -92.0, 5.0}, {16.0, -92.0, 5.0}, {16.0, -50.0, 5.0},
-               {0.0, -22.0, 5.0}, {-16.0, -50.0, 5.0}, {-16.0, -92.0, 5.0}};
-            harborLoop.mCheckpoints = {{-52.0, 96.0, 5.0}, {16.0, 96.0, 5.0},
-                           {52.0, -92.0, 5.0}, {-16.0, -92.0, 5.0}};
-           harborLoop.mBoostPads = {{-52.0, -24.0, 1.8}, {-52.0, 70.0, 1.8},
-               {0.0, 26.0, 1.8}, {52.0, 70.0, 1.8}, {52.0, -24.0, 1.8},
-               {0.0, -22.0, 1.8}};
+           harborLoop.mWaypoints = {{-78.2, -211.6, 5.0},
+               {-119.6, -211.6, 5.0}, {-119.6, -147.2, 5.0},
+               {-69.0, -92.0, 5.0}, {-119.6, -36.8, 5.0}, {-170.2, 23.0, 5.0},
+               {-119.6, 78.2, 5.0}, {-69.0, 133.4, 5.0}, {-119.6, 184.0, 5.0},
+               {-119.6, 220.8, 5.0},
+               {-36.8, 220.8, 5.0}, {-36.8, 124.2, 5.0}, {0.0, 59.8, 5.0},
+               {36.8, 124.2, 5.0}, {36.8, 220.8, 5.0}, {119.6, 220.8, 5.0},
+               {119.6, 147.2, 5.0}, {69.0, 92.0, 5.0}, {119.6, 36.8, 5.0},
+               {170.2, -23.0, 5.0}, {119.6, -78.2, 5.0}, {69.0, -133.4, 5.0},
+               {119.6, -184.0, 5.0}, {119.6, -211.6, 5.0}, {36.8, -211.6, 5.0},
+               {36.8, -115.0, 5.0}, {0.0, -50.6, 5.0}, {-36.8, -115.0, 5.0},
+               {-36.8, -211.6, 5.0}};
+            harborLoop.mCheckpoints = {{-119.6, 220.8, 5.0}, {36.8, 220.8, 5.0},
+                           {119.6, -211.6, 5.0}, {-36.8, -211.6, 5.0}};
+           harborLoop.mBoostPads = {{-94.3, -119.6, 1.8}, {-94.3, 105.8, 1.8},
+               {0.0, 59.8, 1.8}, {94.3, 119.6, 1.8}, {94.3, -105.8, 1.8},
+               {0.0, -50.6, 1.8}};
         harborLoop.mAtmosphereRed = 0.3f;
         harborLoop.mAtmosphereGreen = 0.52f;
         harborLoop.mAtmosphereBlue = 0.58f;
@@ -160,24 +324,26 @@ const std::vector<TrackDefinition>& BuiltInTracks()
         switchback.mProvenance = {"OpenHover contributors", "CC BY 4.0",
                       "Original coordinates and procedural runtime materials"};
         switchback.mRoadHalfWidth = 8.0;
-        switchback.mWaypoints = {{0.0, 0.0, 5.0}, {54.0, -12.0, 5.0},
-             {96.0, -4.0, 5.0}, {112.0, 18.0, 5.0},
-             {92.0, 42.0, 5.0}, {48.0, 32.0, 5.0},
-             {20.0, 48.0, 5.0}, {32.0, 72.0, 5.0},
-             {76.0, 66.0, 5.0}, {104.0, 82.0, 5.0},
-             {120.0, 112.0, 5.0}, {90.0, 136.0, 5.0},
-             {44.0, 128.0, 5.0}, {8.0, 102.0, 5.0},
-             {-12.0, 70.0, 5.0}, {-20.0, 36.0, 5.0}};
-            switchback.mCheckpoints = {{112.0, 18.0, 5.0}, {32.0, 72.0, 5.0},
-                           {90.0, 136.0, 5.0}, {-20.0, 36.0, 5.0}};
-        switchback.mBoostPads = {{28.0, -6.0, 1.8}, {104.0, 7.0, 1.8},
-             {26.0, 60.0, 1.8}, {92.0, 75.0, 1.8}, {66.0, 132.0, 1.8}};
-        switchback.mMines = {{48.0, 32.0, 2.1}};
-           switchback.mRaisedSections = {{38.0, -8.0, 1.25, 7.2, -0.22, 1.45},
-               {104.0, 7.0, 1.25, 7.2, 0.94, 1.45}, {102.0, 30.0, 1.25, 7.2, 2.27, 1.45},
-               {70.0, 37.0, 1.25, 7.2, -2.92, 1.45}, {26.0, 60.0, 1.25, 7.2, 1.11, 1.45},
-               {54.0, 69.0, 16.0, 5.4, -0.14, 1.45, true}, {112.0, 97.0, 1.25, 7.2, 1.08, 1.45},
-               {67.0, 132.0, 15.0, 5.4, -2.97, 1.45, true}};
+        switchback.mWaypoints = {{-32.0, 57.6, 5.0},
+               {0.0, 0.0, 5.0}, {172.8, -38.4, 5.0},
+             {307.2, -12.8, 5.0}, {358.4, 57.6, 5.0},
+             {294.4, 134.4, 5.0}, {153.6, 102.4, 5.0},
+             {64.0, 153.6, 5.0}, {102.4, 230.4, 5.0},
+             {243.2, 211.2, 5.0}, {332.8, 262.4, 5.0},
+             {384.0, 358.4, 5.0}, {288.0, 435.2, 5.0},
+             {140.8, 409.6, 5.0}, {25.6, 326.4, 5.0},
+             {-38.4, 224.0, 5.0}, {-64.0, 115.2, 5.0}};
+            switchback.mCheckpoints = {{358.4, 57.6, 5.0}, {102.4, 230.4, 5.0},
+                           {288.0, 435.2, 5.0}, {-64.0, 115.2, 5.0}};
+        switchback.mBoostPads = {{89.6, -19.2, 1.8}, {332.8, 22.4, 1.8},
+             {83.2, 192.0, 1.8}, {294.4, 240.0, 1.8}, {211.2, 422.4, 1.8},
+             {240.0, -25.6, 1.8}, {-6.4, 275.2, 1.8}, {-32.0, 57.6, 1.8}};
+        switchback.mMines = {{153.6, 102.4, 2.1}, {83.2, 368.0, 2.1}, {-51.2, 169.6, 2.1}};
+           switchback.mRaisedSections = {{121.6, -25.6, 1.25, 7.2, -0.22, 1.45},
+               {332.8, 22.4, 1.25, 7.2, 0.94, 1.45}, {326.4, 96.0, 1.25, 7.2, 2.27, 1.45},
+               {224.0, 118.4, 1.25, 7.2, -2.92, 1.45}, {83.2, 192.0, 1.25, 7.2, 1.11, 1.45},
+               {172.8, 220.8, 16.0, 5.4, -0.14, 1.45, true}, {358.4, 310.4, 1.25, 7.2, 1.08, 1.45},
+               {214.4, 422.4, 15.0, 5.4, -2.97, 1.45, true}};
         switchback.mAtmosphereRed = 0.48f;
         switchback.mAtmosphereGreen = 0.34f;
         switchback.mAtmosphereBlue = 0.28f;
@@ -195,22 +361,25 @@ const std::vector<TrackDefinition>& BuiltInTracks()
         velocityRing.mProvenance = {"OpenHover contributors", "CC BY 4.0",
                        "Original coordinates and procedural runtime materials"};
         velocityRing.mRoadHalfWidth = 9.0;
-        velocityRing.mWaypoints = {{0.0, 0.0, 5.0}, {56.0, -18.0, 5.0},
-               {104.0, -2.0, 5.0}, {126.0, 26.0, 5.0},
-               {96.0, 52.0, 5.0}, {128.0, 84.0, 5.0},
-               {102.0, 116.0, 5.0}, {58.0, 100.0, 5.0},
-               {32.0, 136.0, 5.0}, {-8.0, 120.0, 5.0},
-               {-42.0, 90.0, 5.0}, {-24.0, 60.0, 5.0},
-               {-58.0, 32.0, 5.0}, {-34.0, 6.0, 5.0}};
-            velocityRing.mCheckpoints = {{126.0, 26.0, 5.0}, {102.0, 116.0, 5.0},
-                             {-8.0, 120.0, 5.0}, {-58.0, 32.0, 5.0}};
-        velocityRing.mBoostPads = {{28.0, -9.0, 1.9}, {112.0, 8.0, 1.9},
-               {114.0, 100.0, 1.9}, {42.0, 122.0, 1.9}, {-34.0, 75.0, 1.9}};
-         velocityRing.mHazardZones = {{78.0, -11.0, 4.0, 0.75}, {112.0, 66.0, 4.0, 0.75},
-             {80.0, 108.0, 4.0, 0.75}, {-32.0, 75.0, 4.0, 0.75}};
-         velocityRing.mRaisedSections = {{38.0, -12.0, 1.35, 7.8, -0.31, 1.38},
-             {113.0, 10.0, 1.35, 7.8, 0.9, 1.38}, {112.0, 68.0, 1.35, 7.8, 0.79, 1.38},
-             {80.0, 108.0, 17.0, 6.0, -2.79, 1.38, true}, {14.0, 128.0, 1.35, 7.8, -2.76, 1.38}};
+        velocityRing.mWaypoints = {{-59.5, 10.5, 5.0},
+               {0.0, 0.0, 5.0}, {196.0, -63.0, 5.0},
+               {364.0, -7.0, 5.0}, {441.0, 91.0, 5.0},
+               {336.0, 182.0, 5.0}, {448.0, 294.0, 5.0},
+               {357.0, 406.0, 5.0}, {203.0, 350.0, 5.0},
+               {112.0, 476.0, 5.0}, {-28.0, 420.0, 5.0},
+               {-147.0, 315.0, 5.0}, {-84.0, 210.0, 5.0},
+               {-203.0, 112.0, 5.0}, {-119.0, 21.0, 5.0}};
+            velocityRing.mCheckpoints = {{441.0, 91.0, 5.0}, {357.0, 406.0, 5.0},
+                             {-28.0, 420.0, 5.0}, {-203.0, 112.0, 5.0}};
+        velocityRing.mBoostPads = {{98.0, -31.5, 1.9}, {392.0, 28.0, 1.9},
+               {399.0, 350.0, 1.9}, {147.0, 427.0, 1.9}, {-119.0, 262.5, 1.9},
+               {388.5, 136.5, 1.9}, {-87.5, 367.5, 1.9}, {-161.0, 66.5, 1.9}};
+         velocityRing.mHazardZones = {{273.0, -38.5, 4.0, 0.75}, {392.0, 231.0, 4.0, 0.75},
+             {280.0, 378.0, 4.0, 0.75}, {-112.0, 262.5, 4.0, 0.75},
+             {-143.5, 161.0, 4.0, 0.75}};
+         velocityRing.mRaisedSections = {{133.0, -42.0, 1.35, 7.8, -0.31, 1.38},
+             {395.5, 35.0, 1.35, 7.8, 0.9, 1.38}, {392.0, 238.0, 1.35, 7.8, 0.79, 1.38},
+             {280.0, 378.0, 17.0, 6.0, -2.79, 1.38, true}, {49.0, 448.0, 1.35, 7.8, -2.76, 1.38}};
         velocityRing.mAtmosphereRed = 0.28f;
         velocityRing.mAtmosphereGreen = 0.44f;
         velocityRing.mAtmosphereBlue = 0.4f;

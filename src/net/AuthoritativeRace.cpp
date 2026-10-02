@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "AuthoritativeRace.h"
+#include "RivalNames.h"
 
 #include "RacerCollision.h"
 #include "SteeringAssist.h"
@@ -7,6 +8,7 @@
 #include "WallCollision.h"
 
 #include <cmath>
+#include <random>
 #include <utility>
 
 namespace
@@ -76,8 +78,11 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
     std::vector<LobbyPlayerId> racerIds = pPlayerIds;
     if (RaceModeUsesRivals(pRaceMode))
     {
-        for (int index = 0; index < pRivalCount; ++index)
-            racerIds.push_back(kFirstAiPlayerId + static_cast<LobbyPlayerId>(index));
+        // An AI racer's id carries its display-name pool index, so every client shows the same
+        // names without any extra protocol field, and no two rivals share a name.
+        std::random_device entropy;
+        for (int nameIndex : PickRivalNames(pRivalCount, entropy()))
+            racerIds.push_back(kFirstAiPlayerId + static_cast<LobbyPlayerId>(nameIndex));
     }
     for (int index = 0; index < static_cast<int>(racerIds.size()); ++index)
     {

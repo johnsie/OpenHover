@@ -33,6 +33,7 @@ void Championship::Reset()
     mPlayerPoints = 0;
     mCompetitorCount = 0;
     mCompetitorPoints.clear();
+    mLastPointsAwarded.clear();
     mEventRecorded = false;
     mComplete = false;
 }
@@ -61,11 +62,22 @@ bool Championship::RecordResults(const std::vector<int>& pPositions)
     mCompetitorCount = static_cast<int>(pPositions.size());
     if (mCompetitorPoints.empty())
         mCompetitorPoints.assign(mCompetitorCount, 0);
+    mLastPointsAwarded.assign(mCompetitorCount, 0);
     for (int competitorIndex = 0; competitorIndex < mCompetitorCount; ++competitorIndex)
-        mCompetitorPoints[competitorIndex] += PointsForPosition(pPositions[competitorIndex]);
+    {
+        mLastPointsAwarded[competitorIndex] = PointsForPosition(pPositions[competitorIndex]);
+        mCompetitorPoints[competitorIndex] += mLastPointsAwarded[competitorIndex];
+    }
     mPlayerPoints = mCompetitorPoints[0];
     mEventRecorded = true;
     return true;
+}
+
+int Championship::LastPointsAwarded(int pCompetitorIndex) const
+{
+    if (pCompetitorIndex < 0 || pCompetitorIndex >= static_cast<int>(mLastPointsAwarded.size()))
+        return 0;
+    return mLastPointsAwarded[pCompetitorIndex];
 }
 
 int Championship::CompetitorPoints(int pCompetitorIndex) const

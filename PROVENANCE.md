@@ -123,6 +123,57 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/Missile.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic race missile API |
 | `src/game/Missile.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | accelerated bouncing missile and spin-out hits |
 | `tests/MissileSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | missile movement and impact test |
+| `src/game/Mine.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic race mine API |
+| `src/game/Mine.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | mine placement and spin-out hits |
+| `tests/MineSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | mine placement and impact test |
+| `src/game/PracticeGuide.h` | Original | Maintainer, with AI assistance (OpenAI Codex) | MIT OR Apache-2.0 | event-driven in-game practice lesson API |
+| `src/game/PracticeGuide.cpp` | Original | Maintainer, with AI assistance (OpenAI Codex) | MIT OR Apache-2.0 | deterministic practice lesson progression |
+| `tests/PracticeGuideSmoke.cpp` | Original | Maintainer, with AI assistance (OpenAI Codex) | MIT OR Apache-2.0 | practice lesson progression test |
+| `src/game/KeyBindings.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | remappable keyboard binding API |
+| `src/game/KeyBindings.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | binding defaults, conflict swap, validation, persistence text |
+| `tests/KeyBindingsSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | key binding behavior test |
+| `src/game/PadBindings.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | remappable gamepad binding API |
+| `src/game/PadBindings.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | pad defaults, swap, validation, persistence text |
+| `tests/PadBindingsSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | gamepad binding behavior test |
+| `src/game/PadMenuInput.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | gamepad-to-menu-key mapping API |
+| `src/game/PadMenuInput.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | D-pad, A, B and Start menu mapping |
+| `tests/PadMenuInputSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | gamepad menu mapping test |
+| `src/game/GhostLibrary.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best-run ghost store API |
+| `src/game/GhostLibrary.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best ghost selection and versioned persistence |
+| `tests/GhostLibrarySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ghost selection and persistence test |
+| `tests/ImpairedNetworkSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | lossy, delayed, mixed-rate input stream test |
+| `tests/TrackLapTimeSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | lap duration bounds test for built-in tracks |
+| `docs/release-notes.md` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | player-facing release notes |
+| `src/net/ReconnectPolicy.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | client reconnect scheduling API |
+| `src/net/ReconnectPolicy.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | backoff schedule and give-up rules |
+| `tests/ReconnectPolicySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | reconnect scheduling test |
+| `src/game/RivalNames.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | AI rival display name API |
+| `src/game/RivalNames.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | rival name roster |
+| `tests/RivalNamesSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | rival name roster test |
+| `src/game/CameraRig.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | chase camera motion comfort API |
+| `src/game/CameraRig.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | heading smoothing and speed-zoom policy |
+| `tests/CameraRigSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | camera comfort behavior test |
+| `src/net/Lobby.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | multiplayer lobby protocol and state API |
+| `src/net/Protocol.h` | Original | Maintainer, with AI assistance (OpenAI Codex) | MIT OR Apache-2.0 | shared protocol and built-in content compatibility versions |
+| `src/net/Lobby.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | multiplayer room, presence, settings, and chat state |
+| `src/net/TcpLobbyClient.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | cross-platform TCP lobby client API |
+| `src/net/TcpLobbyClient.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | cross-platform TCP lobby client implementation |
+| `src/net/AuthoritativeRace.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | authoritative online race API |
+| `src/net/AuthoritativeRace.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | server-side race simulation and snapshots |
+| `src/server/main.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | dedicated lobby and race server entry point |
+| `tests/LobbySmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | lobby state and protocol test |
+| `tests/LobbyClientSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | TCP lobby and race integration test |
+| `tests/AuthoritativeRaceSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | authoritative race simulation test |
+| `docs/multiplayer.md` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | multiplayer use, protocol, deployment, and operations guide |
+| `.github/workflows/package.yml` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | GitHub Actions release packaging workflow |
+| `.gitlab-ci.yml` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | race server build and deployment pipeline |
+| `packaging/debian/openhover-deploy` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | restricted race server deployment wrapper |
+| `packaging/debian/openhover-gitlab-runner.sudoers` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deployment wrapper authorization |
+| `packaging/debian/postinst` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Debian package post-installation script |
+| `packaging/debian/postrm` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Debian package post-removal script |
+| `packaging/debian/prerm` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | Debian package pre-removal script |
+| `packaging/systemd/openhover-raceserver.service` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | dedicated race server systemd unit |
+| `scripts/install-race-server.sh` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | race server package installation helper |
 
 ## Not carried over, on purpose
 

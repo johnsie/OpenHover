@@ -2,15 +2,18 @@
 #include "AuthoritativeRace.h"
 #include "Championship.h"
 #include "Lobby.h"
+#include "Protocol.h"
 #include "TrackDefinition.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -26,6 +29,7 @@ namespace
 {
 const int kDefaultPort = 9700;
 const std::size_t kMaximumReceiveBuffer = 4096;
+const std::size_t kMaximumConnections = 64;
 
 #ifndef OPENHOVER_VERSION
 #define OPENHOVER_VERSION "unknown"
@@ -40,7 +44,16 @@ struct ClientConnection
     int mSocket = -1;
     LobbyPlayerId mPlayerId = 0;
     std::string mReceiveBuffer;
+    LobbyChatRateLimiter mChatRateLimiter;
+    LobbyReportRateLimiter mReportRateLimiter;
 };
+
+double MonotonicSeconds()
+{
+    typedef std::chrono::steady_clock Clock;
+    static const Clock::time_point start = Clock::now();
+    return std::chrono::duration<double>(Clock::now() - start).count();
+}
 
 bool ContainsProtocolDelimiter(const std::string& pText)
 {
@@ -94,22 +107,63 @@ void SendLine(const ClientConnection& pClient, const std::string& pText)
     send(pClient.mSocket, line.c_str(), line.size(), MSG_NOSIGNAL);
 }
 
-void BroadcastLobbySnapshot(const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
+std::string LobbySnapshotForPlayer(const Lobby& pLobby, LobbyPlayerId pPlayerId)
 {
     std::ostringstream snapshot;
     snapshot << "LOBBY";
     for (const LobbyPlayer& player : pLobby.Players())
-        snapshot << "|P," << player.mId << ',' << player.mDisplayName;
+    {
+        LobbyRoomId visibleRoomId = 0;
+        bool host = false;
+        bool ready = false;
+        for (const LobbyRoom& room : pLobby.Rooms())
+        {
+            const bool playerIsMember = std::find(room.mPlayerIds.begin(), room.mPlayerIds.end(), player.mId)
+                != room.mPlayerIds.end();
+            const bool viewerIsMember = std::find(room.mPlayerIds.begin(), room.mPlayerIds.end(), pPlayerId)
+                != room.mPlayerIds.end();
+            if (playerIsMember && (!room.mPrivate || viewerIsMember))
+            {
+                visibleRoomId = room.mId;
+                host = room.mHostId == player.mId;
+                ready = std::find(room.mReadyPlayerIds.begin(), room.mReadyPlayerIds.end(), player.mId)
+                    != room.mReadyPlayerIds.end();
+                break;
+            }
+        }
+        snapshot << "|P," << player.mId << ',' << player.mDisplayName << ',' << visibleRoomId
+                 << ',' << (host ? 1 : 0) << ',' << (ready ? 1 : 0);
+    }
     for (const LobbyRoom& room : pLobby.Rooms())
     {
+        const bool member = std::find(room.mPlayerIds.begin(), room.mPlayerIds.end(), pPlayerId)
+            != room.mPlayerIds.end();
+        if (room.mPrivate && !member)
+            continue;
         snapshot << "|R," << room.mId << ',' << room.mName << ',' << room.mHostId << ','
                  << room.mPlayerIds.size() << ',' << room.mSettings.mPlayerCapacity << ','
                  << (room.mRaceRunning ? 1 : 0) << ',' << static_cast<int>(room.mSettings.mRaceMode)
                  << ',' << room.mSettings.mTrackIndex << ',' << room.mSettings.mLapCount << ','
-                 << room.mSettings.mRivalCount << ',' << (room.mSettings.mWeaponsAllowed ? 1 : 0);
+                 << room.mSettings.mRivalCount << ',' << (room.mSettings.mWeaponsAllowed ? 1 : 0)
+                 << ',' << (room.mPrivate ? 1 : 0) << ',' << room.mReadyPlayerIds.size();
     }
+    return snapshot.str();
+}
+
+void BroadcastLobbySnapshot(const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
+{
     for (const ClientConnection& client : pClients)
-        SendLine(client, snapshot.str());
+        SendLine(client, LobbySnapshotForPlayer(pLobby, client.mPlayerId));
+}
+
+std::string GenerateRoomCode()
+{
+    static std::mt19937 generator(std::random_device{}());
+    static const char characters[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    std::string code(6, 'A');
+    for (char& character : code)
+        character = characters[generator() % (sizeof(characters) - 1)];
+    return code;
 }
 
 void BroadcastLobbyNotice(const std::string& pText, const std::vector<ClientConnection>& pClients)
@@ -180,6 +234,17 @@ void BroadcastRaceFinished(LobbyRoomId pRoomId, const Lobby& pLobby,
     }
 }
 
+void BroadcastRaceAborted(LobbyRoomId pRoomId, const std::string& pReason,
+                          const Lobby& pLobby, const std::vector<ClientConnection>& pClients)
+{
+    const std::string message = "RACEABORT " + std::to_string(pRoomId) + "|" + pReason;
+    for (const ClientConnection& client : pClients)
+    {
+        if (pLobby.RoomForPlayer(client.mPlayerId) == pRoomId)
+            SendLine(client, message);
+    }
+}
+
 void BroadcastRaceEvent(LobbyRoomId pRoomId, int pTrackIndex, const Championship& pChampionship,
                         const AuthoritativeRace& pRace, const Lobby& pLobby,
                         const std::vector<ClientConnection>& pClients)
@@ -211,8 +276,16 @@ void StopRace(Lobby& pLobby, std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
 
 void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, Lobby& pLobby,
                   std::map<LobbyRoomId, AuthoritativeRace>& pRaces,
-                  std::map<LobbyRoomId, Championship>& pChampionships)
+                  std::map<LobbyRoomId, Championship>& pChampionships,
+                  const char* pReason)
 {
+    const LobbyPlayerId removedPlayerId = pClients[pIndex].mPlayerId;
+    const int removedSocket = pClients[pIndex].mSocket;
+    const LobbyRoomId removedRoomId = pLobby.RoomForPlayer(removedPlayerId);
+    std::cout << "connection_closed socket=" << removedSocket
+              << " player_id=" << removedPlayerId
+              << " room_id=" << removedRoomId
+              << " reason=" << pReason << std::endl;
     if (pClients[pIndex].mPlayerId != 0)
     {
         std::string displayName;
@@ -225,12 +298,15 @@ void RemoveClient(std::vector<ClientConnection>& pClients, std::size_t pIndex, L
             }
         }
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClients[pIndex].mPlayerId);
+        const bool raceWasRunning = pRaces.find(roomId) != pRaces.end();
         pLobby.Disconnect(pClients[pIndex].mPlayerId);
         StopRace(pLobby, pRaces, pChampionships, roomId);
         close(pClients[pIndex].mSocket);
         pClients.erase(pClients.begin() + pIndex);
         if (!displayName.empty())
             BroadcastLobbyNotice(displayName + " LEFT LOBBY", pClients);
+        if (raceWasRunning)
+            BroadcastRaceAborted(roomId, "PLAYER DISCONNECTED", pLobby, pClients);
         return;
     }
     close(pClients[pIndex].mSocket);
@@ -247,13 +323,32 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
     const std::string argument = separator == std::string::npos ? "" : pLine.substr(separator + 1);
     if (command == "HELLO")
     {
-        if (pClient.mPlayerId != 0 || ContainsProtocolDelimiter(argument))
+        std::vector<std::string> helloFields;
+        std::stringstream helloStream(argument);
+        std::string helloField;
+        while (std::getline(helloStream, helloField, '|'))
+            helloFields.push_back(helloField);
+        int protocolVersion = 0;
+        int contentVersion = 0;
+        if (helloFields.size() != 3
+            || !ParseInteger(helloFields[0], protocolVersion)
+            || !ParseInteger(helloFields[1], contentVersion))
+            SendLine(pClient, "ERROR INCOMPATIBLE CLIENT UPDATE REQUIRED");
+        else if (protocolVersion != kOpenHoverProtocolVersion)
+            SendLine(pClient, "ERROR INCOMPATIBLE PROTOCOL UPDATE REQUIRED");
+        else if (contentVersion != kOpenHoverContentVersion)
+            SendLine(pClient, "ERROR INCOMPATIBLE CONTENT UPDATE REQUIRED");
+        else if (pClient.mPlayerId != 0)
             SendLine(pClient, "ERROR invalid hello");
-        else if (pLobby.Connect(argument, pClient.mPlayerId))
+        else if (!IsValidLobbyDisplayName(helloFields[2]))
+            SendLine(pClient, "ERROR invalid name");
+        else if (pLobby.Connect(helloFields[2], pClient.mPlayerId))
         {
-            SendLine(pClient, "WELCOME " + std::to_string(pClient.mPlayerId));
+            SendLine(pClient, "WELCOME " + std::to_string(pClient.mPlayerId) + "|"
+                + std::to_string(kOpenHoverProtocolVersion) + "|"
+                + std::to_string(kOpenHoverContentVersion) + "|" + OPENHOVER_VERSION);
             BroadcastLobbySnapshot(pLobby, pClients);
-            BroadcastLobbyNotice(argument + " JOINED LOBBY", pClients);
+            BroadcastLobbyNotice(helloFields[2] + " JOINED LOBBY", pClients);
         }
         else
             SendLine(pClient, "ERROR name unavailable");
@@ -264,8 +359,23 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         SendLine(pClient, "ERROR hello required");
         return;
     }
-    if (command == "CHAT" && !ContainsProtocolDelimiter(argument) && pLobby.SendChat(pClient.mPlayerId, argument))
+    if (command == "CHAT")
     {
+        if (ContainsProtocolDelimiter(argument) || argument.empty())
+        {
+            SendLine(pClient, "ERROR invalid chat");
+            return;
+        }
+        if (!pClient.mChatRateLimiter.Allow(MonotonicSeconds()))
+        {
+            SendLine(pClient, "ERROR chat rate limit");
+            return;
+        }
+        if (!pLobby.SendChat(pClient.mPlayerId, argument))
+        {
+            SendLine(pClient, "ERROR invalid chat");
+            return;
+        }
         const LobbyRoomId roomId = pLobby.RoomForPlayer(pClient.mPlayerId);
         bool raceChat = false;
         for (const LobbyRoom& room : pLobby.Rooms())
@@ -283,20 +393,72 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         }
         return;
     }
+    if (command == "REPORT")
+    {
+        const std::size_t reasonSeparator = argument.find('|');
+        int targetId = 0;
+        const std::string reason = reasonSeparator == std::string::npos
+            ? "" : argument.substr(reasonSeparator + 1);
+        const LobbyPlayer* target = nullptr;
+        if (reasonSeparator != std::string::npos
+            && ParseInteger(argument.substr(0, reasonSeparator), targetId))
+        {
+            for (const LobbyPlayer& player : pLobby.Players())
+            {
+                if (player.mId == static_cast<LobbyPlayerId>(targetId))
+                {
+                    target = &player;
+                    break;
+                }
+            }
+        }
+        if (target == nullptr || target->mId == pClient.mPlayerId
+            || !IsValidLobbyReportReason(reason))
+            SendLine(pClient, "ERROR invalid report");
+        else if (!pClient.mReportRateLimiter.Allow(MonotonicSeconds()))
+            SendLine(pClient, "ERROR report rate limit");
+        else
+        {
+            std::cout << "moderation_report reporter_id=" << pClient.mPlayerId
+                      << " target_id=" << target->mId << " reason=" << reason << std::endl;
+            SendLine(pClient, "REPORTACK " + std::to_string(target->mId));
+        }
+        return;
+    }
     if (command == "CREATE")
     {
         LobbyRaceSettings settings;
         LobbyRoomId roomId = 0;
         std::string roomName;
         const std::vector<TrackDefinition>& tracks = BuiltInTracks();
-        if (ParseRoomFields(argument, roomName, settings)
+        const std::size_t privacySeparator = argument.rfind('|');
+        int privateRoom = 0;
+        const bool parsedPrivacy = privacySeparator != std::string::npos
+            && ParseInteger(argument.substr(privacySeparator + 1), privateRoom)
+            && (privateRoom == 0 || privateRoom == 1);
+        std::string joinCode;
+        if (privateRoom != 0)
+        {
+            bool duplicate = false;
+            do
+            {
+                joinCode = GenerateRoomCode();
+                duplicate = false;
+                for (const LobbyRoom& room : pLobby.Rooms())
+                    duplicate = duplicate || room.mJoinCode == joinCode;
+            }
+            while (duplicate);
+        }
+        if (parsedPrivacy && ParseRoomFields(argument.substr(0, privacySeparator), roomName, settings)
             && settings.mTrackIndex >= 0
             && settings.mTrackIndex < static_cast<int>(tracks.size()))
         {
             roomName = tracks[settings.mTrackIndex].mName;
-            if (pLobby.CreateRoom(pClient.mPlayerId, roomName, settings, roomId))
+            if (pLobby.CreateRoom(pClient.mPlayerId, roomName, settings, roomId,
+                                  privateRoom != 0, joinCode))
             {
-                SendLine(pClient, "ROOM " + std::to_string(roomId));
+                SendLine(pClient, "ROOM " + std::to_string(roomId)
+                    + (joinCode.empty() ? "" : "|" + joinCode));
                 BroadcastLobbySnapshot(pLobby, pClients);
                 return;
             }
@@ -317,7 +479,8 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
                 }
             }
         }
-        if (!ParseInteger(argument, roomId) || requestedRoom == nullptr)
+        if (!ParseInteger(argument, roomId) || requestedRoom == nullptr
+            || requestedRoom->mPrivate)
             SendLine(pClient, "ERROR room unavailable");
         else if (requestedRoom->mRaceRunning)
             SendLine(pClient, "ERROR race running");
@@ -327,6 +490,34 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
             SendLine(pClient, "ERROR room full");
         else if (pLobby.JoinRoom(pClient.mPlayerId, requestedRoom->mId))
         {
+            SendLine(pClient, "JOINED " + std::to_string(requestedRoom->mId));
+            BroadcastLobbySnapshot(pLobby, pClients);
+            return;
+        }
+    }
+    else if (command == "JOINCODE")
+    {
+        const LobbyRoom* requestedRoom = nullptr;
+        for (const LobbyRoom& room : pLobby.Rooms())
+        {
+            if (room.mPrivate && room.mJoinCode == argument)
+            {
+                requestedRoom = &room;
+                break;
+            }
+        }
+        if (requestedRoom == nullptr)
+            SendLine(pClient, "ERROR room unavailable");
+        else if (requestedRoom->mRaceRunning)
+            SendLine(pClient, "ERROR race running");
+        else if (pLobby.RoomForPlayer(pClient.mPlayerId) != 0)
+            SendLine(pClient, "ERROR already in room");
+        else if (static_cast<int>(requestedRoom->mPlayerIds.size())
+                 >= requestedRoom->mSettings.mPlayerCapacity)
+            SendLine(pClient, "ERROR room full");
+        else if (pLobby.JoinRoom(pClient.mPlayerId, requestedRoom->mId))
+        {
+            SendLine(pClient, "JOINED " + std::to_string(requestedRoom->mId));
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
         }
@@ -337,6 +528,16 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
         if (argument.empty() && pLobby.LeaveRoom(pClient.mPlayerId))
         {
             StopRace(pLobby, pRaces, pChampionships, roomId);
+            BroadcastLobbySnapshot(pLobby, pClients);
+            return;
+        }
+    }
+    else if (command == "READY")
+    {
+        int ready = 0;
+        if (ParseInteger(argument, ready) && (ready == 0 || ready == 1)
+            && pLobby.SetReady(pClient.mPlayerId, ready != 0))
+        {
             BroadcastLobbySnapshot(pLobby, pClients);
             return;
         }
@@ -356,6 +557,11 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
                 }
             }
             AuthoritativeRace race;
+            if (requestedRoom != nullptr && !pLobby.AllPlayersReady(requestedRoom->mId))
+            {
+                SendLine(pClient, "ERROR players not ready");
+                return;
+            }
             if (requestedRoom != nullptr
                 && race.Start(requestedRoom->mPlayerIds, requestedRoom->mSettings.mTrackIndex,
                               requestedRoom->mSettings.mLapCount,
@@ -440,7 +646,8 @@ int main(int pArgumentCount, char* pArguments[])
     if (pArgumentCount == 2 && std::string(pArguments[1]) == "--version")
     {
         std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
-                  << ")\n";
+                  << ") protocol=" << kOpenHoverProtocolVersion
+                  << " content=" << kOpenHoverContentVersion << "\n";
         return 0;
     }
     if (pArgumentCount == 3 && std::string(pArguments[1]) == "--port"
@@ -509,8 +716,24 @@ int main(int pArgumentCount, char* pArguments[])
             const int clientSocket = accept(listenSocket, nullptr, nullptr);
             if (clientSocket >= 0)
             {
-                clients.push_back({clientSocket, 0, ""});
-                SendLine(clients.back(), "OPENHOVER 1");
+                if (clients.size() >= kMaximumConnections)
+                {
+                    ClientConnection rejected = {clientSocket, 0, "", LobbyChatRateLimiter(),
+                                                 LobbyReportRateLimiter()};
+                    SendLine(rejected, "ERROR server full");
+                    close(clientSocket);
+                    std::cout << "connection_rejected reason=server_full active_connections="
+                              << clients.size() << std::endl;
+                }
+                else
+                {
+                    clients.push_back({clientSocket, 0, "", LobbyChatRateLimiter(),
+                                       LobbyReportRateLimiter()});
+                    std::cout << "connection_open socket=" << clientSocket
+                              << " active_connections=" << clients.size() << std::endl;
+                    SendLine(clients.back(), "OPENHOVER " + std::to_string(kOpenHoverProtocolVersion)
+                        + " " + std::to_string(kOpenHoverContentVersion) + " " + OPENHOVER_VERSION);
+                }
             }
         }
         for (std::size_t index = 0; index < clients.size();)
@@ -525,14 +748,15 @@ int main(int pArgumentCount, char* pArguments[])
             const ssize_t received = recv(client.mSocket, buffer, sizeof(buffer), 0);
             if (received <= 0)
             {
-                RemoveClient(clients, index, lobby, races, championships);
+                RemoveClient(clients, index, lobby, races, championships,
+                             received == 0 ? "peer_closed" : "receive_error");
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }
             client.mReceiveBuffer.append(buffer, static_cast<std::size_t>(received));
             if (client.mReceiveBuffer.size() > kMaximumReceiveBuffer)
             {
-                RemoveClient(clients, index, lobby, races, championships);
+                RemoveClient(clients, index, lobby, races, championships, "receive_limit");
                 BroadcastLobbySnapshot(lobby, clients);
                 continue;
             }

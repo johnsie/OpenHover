@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #include "TcpLobbyClient.h"
+#include "Protocol.h"
 
 #include <algorithm>
 #include <csignal>
@@ -56,13 +57,22 @@ bool TickUntil(TcpLobbyClient& pClient, const std::string& pExpected)
     return false;
 }
 
-bool TickUntilPrefix(TcpLobbyClient& pClient, const std::string& pExpectedPrefix)
+bool TickUntilPrefix(TcpLobbyClient& pClient, const std::string& pExpectedPrefix,
+                     std::string* pMatchedMessage = nullptr)
 {
     for (int attempt = 0; attempt < 200; ++attempt)
     {
         pClient.Tick();
-        if (ContainsPrefix(pClient.TakeMessages(), pExpectedPrefix))
-            return true;
+        const std::vector<std::string> messages = pClient.TakeMessages();
+        for (const std::string& message : messages)
+        {
+            if (message.compare(0, pExpectedPrefix.size(), pExpectedPrefix) == 0)
+            {
+                if (pMatchedMessage != nullptr)
+                    *pMatchedMessage = message;
+                return true;
+            }
+        }
         if (pClient.State() == TcpLobbyClientState::Failed)
         {
             std::cerr << "client failed while waiting for " << pExpectedPrefix << '\n';
@@ -88,13 +98,27 @@ bool TickUntilContaining(TcpLobbyClient& pClient, const std::string& pExpectedTe
     return false;
 }
 
+bool TickUntilFailed(TcpLobbyClient& pClient)
+{
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        pClient.Tick();
+        if (pClient.State() == TcpLobbyClientState::Failed)
+            return true;
+        usleep(10000);
+    }
+    return false;
+}
+
 bool ConnectAndHello(TcpLobbyClient& pClient, int pPort, const std::string& pName, int pExpectedId)
 {
     for (int attempt = 0; attempt < 100; ++attempt)
     {
-        if (pClient.Connect("127.0.0.1", pPort) && TickUntil(pClient, "OPENHOVER 1")
-            && pClient.SendCommand("HELLO " + pName)
-            && TickUntil(pClient, "WELCOME " + std::to_string(pExpectedId)))
+        if (pClient.Connect("127.0.0.1", pPort)
+            && TickUntilPrefix(pClient, "OPENHOVER " + std::to_string(kOpenHoverProtocolVersion) + " ")
+            && pClient.SendCommand("HELLO " + std::to_string(kOpenHoverProtocolVersion) + "|"
+                                   + std::to_string(kOpenHoverContentVersion) + "|" + pName)
+            && TickUntilPrefix(pClient, "WELCOME " + std::to_string(pExpectedId) + "|"))
             return true;
         pClient.Disconnect();
         usleep(10000);
@@ -128,22 +152,59 @@ int main(int pArgumentCount, char* pArguments[])
     TcpLobbyClient guest;
     TcpLobbyClient spectator;
     const bool hostConnected = ConnectAndHello(host, port, "Host", 1);
-    const bool guestConnected = hostConnected && ConnectAndHello(guest, port, "Guest", 2);
+    TcpLobbyClient incompatible;
+    const bool incompatibleRejected = hostConnected && incompatible.Connect("127.0.0.1", port)
+        && TickUntilPrefix(incompatible, "OPENHOVER " + std::to_string(kOpenHoverProtocolVersion) + " ")
+        && incompatible.SendCommand("HELLO 999|" + std::to_string(kOpenHoverContentVersion)
+                                    + "|OldClient")
+        && TickUntil(incompatible, "ERROR INCOMPATIBLE PROTOCOL UPDATE REQUIRED");
+    incompatible.Disconnect();
+    TcpLobbyClient invalidName;
+    const bool invalidNameRejected = incompatibleRejected && invalidName.Connect("127.0.0.1", port)
+        && TickUntilPrefix(invalidName, "OPENHOVER " + std::to_string(kOpenHoverProtocolVersion) + " ")
+        && invalidName.SendCommand("HELLO " + std::to_string(kOpenHoverProtocolVersion) + "|"
+                                   + std::to_string(kOpenHoverContentVersion) + "|Invalid Name")
+        && TickUntil(invalidName, "ERROR invalid name");
+    invalidName.Disconnect();
+    const bool guestConnected = invalidNameRejected && ConnectAndHello(guest, port, "Guest", 2);
     const bool guestAnnounced = guestConnected && TickUntil(host, "CHAT 0 Guest JOINED LOBBY");
-    const bool namedChatDelivered = guestAnnounced && host.SendCommand("CHAT Welcome?")
+    const bool reportAccepted = guestAnnounced && host.SendCommand("REPORT 2|Repeated abuse")
+        && TickUntil(host, "REPORTACK 2");
+    TcpLobbyClient oversizedClient;
+    const bool oversizedClientRemoved = reportAccepted
+        && oversizedClient.Connect("127.0.0.1", port)
+        && TickUntilPrefix(oversizedClient,
+                           "OPENHOVER " + std::to_string(kOpenHoverProtocolVersion) + " ")
+        && oversizedClient.SendCommand(std::string(5000, 'X'))
+        && TickUntilFailed(oversizedClient);
+    oversizedClient.Disconnect();
+    const bool namedChatDelivered = oversizedClientRemoved && host.SendCommand("CHAT Welcome?")
         && TickUntil(host, "CHAT 1 Welcome?") && TickUntil(guest, "CHAT 1 Welcome?");
     const bool spectatorConnected = namedChatDelivered && ConnectAndHello(spectator, port, "Spectator", 3);
+    std::string roomCreatedMessage;
     const bool roomCreated = namedChatDelivered && spectatorConnected
-        && host.SendCommand("CREATE Smoke race|0|0|3|2|0|1")
-        && TickUntil(host, "ROOM 1");
+        && host.SendCommand("CREATE Smoke race|0|0|3|2|0|1|1")
+        && TickUntilPrefix(host, "ROOM 1|", &roomCreatedMessage);
+    const std::string roomCode = roomCreated
+        ? roomCreatedMessage.substr(roomCreatedMessage.find('|') + 1) : "";
+    bool privateRoomHidden = false;
     if (roomCreated)
     {
         guest.Tick();
-        guest.TakeMessages();
+        const std::vector<std::string> guestMessages = guest.TakeMessages();
+        privateRoomHidden = !ContainsText(guestMessages, "|R,1,")
+            && ContainsText(guestMessages, "|P,1,Host,0,0,0");
     }
-    const bool guestJoined = roomCreated && guest.SendCommand("JOIN 1")
+    const bool privateRoomRejectsDirectJoin = privateRoomHidden
+        && guest.SendCommand("JOIN 1") && TickUntil(guest, "ERROR room unavailable");
+    const bool guestJoined = privateRoomRejectsDirectJoin && roomCode.size() == 6
+        && guest.SendCommand("JOINCODE " + roomCode)
         && TickUntilContaining(guest, "|R,1,Harbor Loop,1,2,2,");
-    const bool raceStarted = guestJoined && host.SendCommand("START 1")
+    const bool unreadyStartRejected = guestJoined && host.SendCommand("START 1")
+        && TickUntil(host, "ERROR players not ready");
+    const bool guestReady = unreadyStartRejected && guest.SendCommand("READY 1")
+        && TickUntilContaining(guest, "|P,2,Guest,1,0,1");
+    const bool raceStarted = guestReady && host.SendCommand("START 1")
         && TickUntilPrefix(host, "RACE 1|") && TickUntilPrefix(guest, "RACE 1|");
     const bool raceHudReceived = raceStarted && TickUntilPrefix(host, "RACEHUD 1|3|");
     spectator.Tick();
@@ -161,15 +222,27 @@ int main(int pArgumentCount, char* pArguments[])
             || Contains(spectatorMessages, "CHAT 1 Race message");
         usleep(10000);
     }
+    const bool chatFloodRejected = raceChatReceived
+        && spectator.SendCommand("CHAT Flood1")
+        && spectator.SendCommand("CHAT Flood2")
+        && spectator.SendCommand("CHAT Flood3")
+        && spectator.SendCommand("CHAT Flood4")
+        && spectator.SendCommand("CHAT Flood5")
+        && TickUntil(spectator, "ERROR chat rate limit");
     spectator.Disconnect();
     const bool spectatorDepartureAnnounced = TickUntil(host, "CHAT 0 Spectator LEFT LOBBY");
     host.Disconnect();
-    guest.Disconnect();
+    const bool disconnectEndedRace = TickUntil(guest, "RACEABORT 1|PLAYER DISCONNECTED");
     kill(serverProcess, SIGTERM);
     int serverStatus = 0;
     waitpid(serverProcess, &serverStatus, 0);
-    if (!raceChatReceived || spectatorReceivedRace || spectatorReceivedRaceChat
-        || !spectatorDepartureAnnounced)
+    const bool serverLossDetected = TickUntilFailed(guest);
+    guest.Disconnect();
+    if (!incompatibleRejected || !invalidNameRejected || !reportAccepted || !oversizedClientRemoved
+        || !privateRoomHidden || !privateRoomRejectsDirectJoin || !unreadyStartRejected || !guestReady
+        || !raceChatReceived || !chatFloodRejected
+        || spectatorReceivedRace || spectatorReceivedRaceChat
+        || !spectatorDepartureAnnounced || !disconnectEndedRace || !serverLossDetected)
     {
         std::cerr << "tcp lobby server did not isolate authoritative race snapshots\n";
         return 1;

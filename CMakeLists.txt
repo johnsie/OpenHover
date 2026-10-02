@@ -32,10 +32,15 @@ add_library(openhover_content STATIC src/content/TrackCatalog.cpp src/content/Tr
 target_include_directories(openhover_content PUBLIC src/content)
 target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 
-add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
+add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/SteeringAssist.cpp src/game/TrackDefinition.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
 
-add_library(openhover_lobby STATIC src/net/AuthoritativeRace.cpp src/net/Lobby.cpp src/net/TcpLobbyClient.cpp)
+# Keyboard bindings use SDL scancodes, so they live apart from the SDL-free game and server code.
+add_library(openhover_input STATIC src/game/KeyBindings.cpp src/game/PadBindings.cpp src/game/PadMenuInput.cpp)
+target_include_directories(openhover_input PUBLIC src/game)
+target_link_libraries(openhover_input PUBLIC SDL2::SDL2)
+
+add_library(openhover_lobby STATIC src/net/AuthoritativeRace.cpp src/net/Lobby.cpp src/net/ReconnectPolicy.cpp src/net/TcpLobbyClient.cpp)
 target_include_directories(openhover_lobby PUBLIC src/net)
 target_link_libraries(openhover_lobby PUBLIC openhover_game)
 
@@ -48,7 +53,7 @@ if(UNIX)
 endif()
 
 add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
-target_link_libraries(OpenHover PRIVATE openhover_game openhover_lobby SDL2::SDL2 OpenGL::GL)
+target_link_libraries(OpenHover PRIVATE openhover_game openhover_input openhover_lobby SDL2::SDL2 OpenGL::GL)
 
 if(WIN32)
     target_link_libraries(OpenHover PRIVATE SDL2::SDL2main ws2_32)
@@ -122,6 +127,10 @@ if(BUILD_TESTING AND NOT WIN32)
     target_link_libraries(RecoveryAssistSmoke PRIVATE openhover_game)
     add_test(NAME RecoveryAssistSmoke COMMAND RecoveryAssistSmoke)
 
+    add_executable(GhostLibrarySmoke tests/GhostLibrarySmoke.cpp)
+    target_link_libraries(GhostLibrarySmoke PRIVATE openhover_game)
+    add_test(NAME GhostLibrarySmoke COMMAND GhostLibrarySmoke)
+
     add_executable(InputRecordingSmoke tests/InputRecordingSmoke.cpp)
     target_link_libraries(InputRecordingSmoke PRIVATE openhover_game)
     add_test(NAME InputRecordingSmoke COMMAND InputRecordingSmoke)
@@ -170,9 +179,37 @@ if(BUILD_TESTING AND NOT WIN32)
     target_link_libraries(RaceModeSmoke PRIVATE openhover_game)
     add_test(NAME RaceModeSmoke COMMAND RaceModeSmoke)
 
+    add_executable(PracticeGuideSmoke tests/PracticeGuideSmoke.cpp)
+    target_link_libraries(PracticeGuideSmoke PRIVATE openhover_game)
+    add_test(NAME PracticeGuideSmoke COMMAND PracticeGuideSmoke)
+
     add_executable(WallCollisionSmoke tests/WallCollisionSmoke.cpp)
     target_link_libraries(WallCollisionSmoke PRIVATE openhover_game)
     add_test(NAME WallCollisionSmoke COMMAND WallCollisionSmoke)
+
+    add_executable(CameraRigSmoke tests/CameraRigSmoke.cpp)
+    target_link_libraries(CameraRigSmoke PRIVATE openhover_game)
+    add_test(NAME CameraRigSmoke COMMAND CameraRigSmoke)
+
+    add_executable(RivalNamesSmoke tests/RivalNamesSmoke.cpp)
+    target_link_libraries(RivalNamesSmoke PRIVATE openhover_game)
+    add_test(NAME RivalNamesSmoke COMMAND RivalNamesSmoke)
+
+    add_executable(ReconnectPolicySmoke tests/ReconnectPolicySmoke.cpp)
+    target_link_libraries(ReconnectPolicySmoke PRIVATE openhover_lobby)
+    add_test(NAME ReconnectPolicySmoke COMMAND ReconnectPolicySmoke)
+
+    add_executable(PadMenuInputSmoke tests/PadMenuInputSmoke.cpp)
+    target_link_libraries(PadMenuInputSmoke PRIVATE openhover_input)
+    add_test(NAME PadMenuInputSmoke COMMAND PadMenuInputSmoke)
+
+    add_executable(PadBindingsSmoke tests/PadBindingsSmoke.cpp)
+    target_link_libraries(PadBindingsSmoke PRIVATE openhover_input)
+    add_test(NAME PadBindingsSmoke COMMAND PadBindingsSmoke)
+
+    add_executable(KeyBindingsSmoke tests/KeyBindingsSmoke.cpp)
+    target_link_libraries(KeyBindingsSmoke PRIVATE openhover_input)
+    add_test(NAME KeyBindingsSmoke COMMAND KeyBindingsSmoke)
 
     add_executable(LapTimingSmoke tests/LapTimingSmoke.cpp)
     target_link_libraries(LapTimingSmoke PRIVATE openhover_game)
@@ -203,7 +240,19 @@ if(BUILD_TESTING AND NOT WIN32)
         add_executable(LobbyClientSmoke tests/LobbyClientSmoke.cpp)
         target_link_libraries(LobbyClientSmoke PRIVATE openhover_lobby)
         add_test(NAME LobbyClientSmoke COMMAND LobbyClientSmoke $<TARGET_FILE:OpenHoverServer>)
+
+        add_test(NAME ServerVersionSmoke COMMAND OpenHoverServer --version)
+        set_tests_properties(ServerVersionSmoke PROPERTIES
+            PASS_REGULAR_EXPRESSION "protocol=5 content=2")
     endif()
+
+    add_executable(TrackLapTimeSmoke tests/TrackLapTimeSmoke.cpp)
+    target_link_libraries(TrackLapTimeSmoke PRIVATE openhover_lobby)
+    add_test(NAME TrackLapTimeSmoke COMMAND TrackLapTimeSmoke)
+
+    add_executable(ImpairedNetworkSmoke tests/ImpairedNetworkSmoke.cpp)
+    target_link_libraries(ImpairedNetworkSmoke PRIVATE openhover_lobby)
+    add_test(NAME ImpairedNetworkSmoke COMMAND ImpairedNetworkSmoke)
 
     add_executable(AuthoritativeRaceSmoke tests/AuthoritativeRaceSmoke.cpp)
     target_link_libraries(AuthoritativeRaceSmoke PRIVATE openhover_lobby)

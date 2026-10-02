@@ -29,6 +29,20 @@ const char* CraftClassName(CraftClass pCraftClass)
     return "Balanced";
 }
 
+const char* CraftClassDescription(CraftClass pCraftClass)
+{
+    switch (pCraftClass)
+    {
+    case CraftClass::Balanced:
+        return "VERSATILE SPEED AND HANDLING";
+    case CraftClass::Sprint:
+        return "FASTEST WITH WIDER TURNS";
+    case CraftClass::Control:
+        return "SHARP TURNS LOWER TOP SPEED";
+    }
+    return "VERSATILE SPEED AND HANDLING";
+}
+
 HovercraftTuning CraftClassTuning(CraftClass pCraftClass)
 {
     HovercraftTuning tuning;
