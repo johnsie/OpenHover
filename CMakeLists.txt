@@ -8,6 +8,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(OPENHOVER_PACKAGE_VERSION "0.1.0" CACHE STRING "Installer package version")
 option(OPENHOVER_DESKTOP_PACKAGE "Package the desktop game instead of the race server" OFF)
 
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE OPENHOVER_SOURCE_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT OPENHOVER_SOURCE_REVISION)
+    set(OPENHOVER_SOURCE_REVISION "unknown")
+endif()
+
 include(CTest)
 find_package(Threads REQUIRED)
 find_package(SDL2 2.0 REQUIRED CONFIG)
@@ -32,6 +42,9 @@ target_link_libraries(openhover_lobby PUBLIC openhover_game)
 if(UNIX)
     add_executable(OpenHoverServer src/server/main.cpp)
     target_link_libraries(OpenHoverServer PRIVATE openhover_lobby)
+    target_compile_definitions(OpenHoverServer PRIVATE
+        OPENHOVER_VERSION="${OPENHOVER_PACKAGE_VERSION}"
+        OPENHOVER_SOURCE_REVISION="${OPENHOVER_SOURCE_REVISION}")
 endif()
 
 add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)

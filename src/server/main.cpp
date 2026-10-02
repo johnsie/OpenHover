@@ -25,6 +25,14 @@ namespace
 const int kDefaultPort = 9700;
 const std::size_t kMaximumReceiveBuffer = 4096;
 
+#ifndef OPENHOVER_VERSION
+#define OPENHOVER_VERSION "unknown"
+#endif
+
+#ifndef OPENHOVER_SOURCE_REVISION
+#define OPENHOVER_SOURCE_REVISION "unknown"
+#endif
+
 struct ClientConnection
 {
     int mSocket = -1;
@@ -361,10 +369,21 @@ void HandleCommand(ClientConnection& pClient, const std::string& pLine, Lobby& p
 int main(int pArgumentCount, char* pArguments[])
 {
     int port = kDefaultPort;
+    if (pArgumentCount == 2 && std::string(pArguments[1]) == "--version")
+    {
+        std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
+                  << ")\n";
+        return 0;
+    }
     if (pArgumentCount == 3 && std::string(pArguments[1]) == "--port"
         && !ParseInteger(pArguments[2], port))
     {
         std::cerr << "Invalid port\n";
+        return 1;
+    }
+    if (pArgumentCount != 1 && pArgumentCount != 3)
+    {
+        std::cerr << "Usage: OpenHoverServer [--port PORT] [--version]\n";
         return 1;
     }
     if (port < 1 || port > 65535)
@@ -393,7 +412,8 @@ int main(int pArgumentCount, char* pArguments[])
         return 1;
     }
 
-    std::cout << "OpenHoverServer listening on TCP port " << port << '\n';
+    std::cout << "OpenHoverServer " << OPENHOVER_VERSION << " (" << OPENHOVER_SOURCE_REVISION
+              << ") listening on TCP port " << port << '\n';
     Lobby lobby;
     std::map<LobbyRoomId, AuthoritativeRace> races;
     std::vector<ClientConnection> clients;
