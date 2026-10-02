@@ -9,8 +9,31 @@ permissions:
   contents: read
 
 jobs:
-  linux-deb:
-    name: Linux DEB
+  linux-desktop-deb:
+    name: Linux Desktop DEB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libgl1-mesa-dev libsdl2-dev
+      - name: Configure
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then version="${GITHUB_REF_NAME#v}"; else version="0.0.0"; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOPENHOVER_PACKAGE_VERSION="${version}" -DOPENHOVER_DESKTOP_PACKAGE=ON
+      - name: Build and test
+        run: cmake --build build --parallel && ctest --test-dir build --output-on-failure
+      - name: Package DEB
+        run: cpack --config build/CPackConfig.cmake --generator DEB
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhover-linux-desktop-deb
+          path: build/packages/openhover_*.deb
+          if-no-files-found: error
+
+  race-server-deb:
+    name: Race Server DEB
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,13 +46,13 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOPENHOVER_PACKAGE_VERSION="${version}"
       - name: Build and test
         run: cmake --build build --parallel && ctest --test-dir build --output-on-failure
-      - name: Package DEB
+      - name: Package race server DEB
         run: cpack --config build/CPackConfig.cmake --generator DEB
-      - name: Upload DEB
+      - name: Upload race server DEB
         uses: actions/upload-artifact@v4
         with:
-          name: openhover-linux-deb
-          path: build/packages/*.deb
+          name: openhover-race-server-deb
+          path: build/packages/openhover-raceserver_*.deb
           if-no-files-found: error
 
   windows-installer:
