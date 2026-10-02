@@ -4337,6 +4337,8 @@ int main(int pArgumentCount, char* pArguments[])
                        wallTexture);
             DrawFinishZone(courseWaypoints, selectedTrack.mRoadHalfWidth);
             DrawCheckpointGates(courseWaypoints, checkpoints, 0, selectedTrack.mRoadHalfWidth);
+            for (const RaisedSection& section : raisedSections)
+                DrawRaisedSection(section);
             const OnlineRacerView* localRacer = nullptr;
             for (std::size_t racerIndex = 0; racerIndex < gOnlineRacers.size(); ++racerIndex)
             {
