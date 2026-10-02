@@ -113,9 +113,10 @@ must include transport encryption and an abuse-control policy.
 
 ## Continuous Deployment
 
-GitLab CI builds and tests every pipeline. A successful pipeline on the default
-branch creates an `openhover-raceserver` Debian package, stores it as a pipeline
-artifact, and runs the `deploy_race_server` job on the GitLab runner. Deployment
-installs the package as `openhover-raceserver.service`. The runner account must be
-able to run `sudo -n scripts/install-race-server.sh` and must execute on the
-intended server host. The service listens on TCP port `9700`.
+GitLab CI uses the `race-server` runner tag, builds and tests the server, and stores
+an `openhover-raceserver` Debian package in `dist/` as a pipeline artifact. A tag
+pipeline exposes the manual production `deploy_race_server` job. Deployment calls
+the server-side `/usr/local/sbin/openhover-deploy` wrapper, which validates that
+the artifact is an OpenHover package within the GitLab build directory before
+installing it as `openhover-raceserver.service`. The service listens on TCP port
+`9700`.
