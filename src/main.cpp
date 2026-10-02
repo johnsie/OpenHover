@@ -110,6 +110,8 @@ int gOnlineRaceRoomId = 0;
 unsigned int gOnlineRaceTick = 0;
 int gOnlineTargetLaps = 0;
 std::vector<OnlineRacerView> gOnlineRacers;
+double gOnlineHudElapsedSeconds = 0.0;
+Uint32 gOnlineHudSnapshotTicks = 0;
 
 std::vector<std::string> SplitLobbyField(const std::string& pText, char pDelimiter)
 {
@@ -227,6 +229,11 @@ bool ParseRaceHudSnapshot(const std::string& pMessage)
             racer.mLapTiming.mCurrentSeconds = std::strtod(fields[6].c_str(), nullptr);
             racer.mLapTiming.mLastSeconds = std::strtod(fields[7].c_str(), nullptr);
             racer.mLapTiming.mBestSeconds = std::strtod(fields[8].c_str(), nullptr);
+            if (playerId == gLobbyPlayerId)
+            {
+                gOnlineHudElapsedSeconds = racer.mProgress.mElapsedSeconds;
+                gOnlineHudSnapshotTicks = SDL_GetTicks();
+            }
             break;
         }
     }
@@ -2865,7 +2872,15 @@ void DrawOnlineHud(const OnlineRacerView& pPlayer, int pRacerCount, int pTargetL
     const int speed = static_cast<int>(std::fabs(pPlayer.mState.mSpeed));
     const int targetLaps = std::max(1, std::min(5, pTargetLaps));
     const int displayedLap = std::min(targetLaps, pPlayer.mProgress.mCompletedLaps + 1);
-    const int elapsedSeconds = static_cast<int>(pPlayer.mProgress.mElapsedSeconds);
+    double displayedElapsedSeconds = pPlayer.mProgress.mElapsedSeconds;
+    if (!pPlayer.mProgress.mFinished && gOnlineHudSnapshotTicks != 0)
+    {
+        const double sinceSnapshot = std::min(0.25,
+            (SDL_GetTicks() - gOnlineHudSnapshotTicks) / 1000.0);
+        displayedElapsedSeconds = std::max(displayedElapsedSeconds,
+                                           gOnlineHudElapsedSeconds + sinceSnapshot);
+    }
+    const int elapsedSeconds = static_cast<int>(displayedElapsedSeconds);
     const int currentLapSeconds = static_cast<int>(pPlayer.mLapTiming.mCurrentSeconds);
     const int bestLapSeconds = static_cast<int>(pPlayer.mLapTiming.mBestSeconds);
     char speedLabel[24];
@@ -3313,6 +3328,8 @@ int main(int pArgumentCount, char* pArguments[])
         gOnlineRaceTick = 0;
         gOnlineTargetLaps = 0;
         gOnlineRacers.clear();
+        gOnlineHudElapsedSeconds = 0.0;
+        gOnlineHudSnapshotTicks = 0;
     };
     const auto connectLobby = [&]()
     {
@@ -3397,6 +3414,8 @@ int main(int pArgumentCount, char* pArguments[])
             {
                 if (frontScreen != FrontScreen::OnlineRace)
                 {
+                    gOnlineHudElapsedSeconds = 0.0;
+                    gOnlineHudSnapshotTicks = 0;
                     for (const LobbyRoomView& room : gLobbyRooms)
                     {
                         if (room.mId == gOnlineRaceRoomId
@@ -3425,6 +3444,8 @@ int main(int pArgumentCount, char* pArguments[])
                 gOnlineRaceTick = 0;
                 gOnlineTargetLaps = 0;
                 gOnlineRacers.clear();
+                gOnlineHudElapsedSeconds = 0.0;
+                gOnlineHudSnapshotTicks = 0;
                 gOnlineChatInput.clear();
                 gOnlineChatInputFocused = false;
                 SDL_StartTextInput();
