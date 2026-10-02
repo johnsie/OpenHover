@@ -71,6 +71,11 @@ pads in the middle of straights longer than 80 units. The status line shows whet
 valid, its length, and a rough lap time at about 30 m/s; the green square is the start, yellow
 squares are checkpoints, orange squares are bridges, and blue dots are pads.
 
+The **Mines** and **Hazards** buttons add optional obstacles: on straights of at least 110 units
+that have no pad or bridge nearby, a third of the way along, the builder places a mine (radius
+2.1) or a hazard zone (half the road wide, slowing a craft by 0.75 per second). With both on they
+alternate; at most eight are placed. Red squares are mines and purple squares are hazard zones.
+
 **Save Track** writes `<id>.ohtrack` to the `tracks` folder and adds the track to the local race
 list immediately. The id comes from the name, and a name that is already used by another track is
 refused. **Save and Drive** does the same and then starts a local race on the track so you can try

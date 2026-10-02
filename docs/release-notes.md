@@ -3,6 +3,16 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.20
+
+- The track editor can now add **mines** and **hazard zones**. Two toggle buttons, Mines and
+  Hazards, scatter them along long straights (clear of the start, the bridges, and the boost pads);
+  the preview shows mines in red and hazards in purple, and the built track is validated and can be
+  hosted online like any other.
+- The pause menu now has the **HUD Text** setting too (between Camera Motion and Menu Volume), so
+  the accessibility options (camera motion, HUD text size, assists, volume, key bindings) can all
+  be changed without leaving a race. The pause menu rows are a little closer together to make room.
+
 ## 0.1.19
 
 - The online race HUD no longer draws the leaderboard on top of the course map: the leaders list

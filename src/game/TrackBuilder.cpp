@@ -72,7 +72,8 @@ std::string MakeTrackId(const std::string& pName)
 }
 
 BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAuthor,
-                                const std::vector<EditorPoint>& pPoints, double pRoadHalfWidth)
+                                const std::vector<EditorPoint>& pPoints, double pRoadHalfWidth,
+                                const BuilderOptions& pOptions)
 {
     if (pPoints.size() < 5)
         return Failure("ADD AT LEAST 5 POINTS");
@@ -192,6 +193,49 @@ BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAu
             nearBridge = nearBridge || std::hypot(bridge.mX - pad.mX, bridge.mY - pad.mY) < bridge.mHalfLength + 10.0;
         if (!nearBridge)
             track.mBoostPads.push_back(pad);
+    }
+
+    // Optional hazards: alternate mines and slowing zones along straights that have no pad and are
+    // clear of every bridge, a third of the way along so they are met after the corner exits.
+    if (pOptions.mMines || pOptions.mHazards)
+    {
+        int placed = 0;
+        for (std::size_t index = 1; index + 1 < count && placed < 8; ++index)
+        {
+            const RaceGate& a = track.mWaypoints[index];
+            const RaceGate& b = track.mWaypoints[(index + 1) % count];
+            const double length = std::hypot(b.mX - a.mX, b.mY - a.mY);
+            if (length < 110.0)
+                continue;
+            const double x = a.mX + (b.mX - a.mX) / 3.0;
+            const double y = a.mY + (b.mY - a.mY) / 3.0;
+            bool blocked = false;
+            for (const RaisedSection& bridge : track.mRaisedSections)
+                blocked = blocked || std::hypot(bridge.mX - x, bridge.mY - y) < bridge.mHalfLength + 15.0;
+            for (const BoostPad& pad : track.mBoostPads)
+                blocked = blocked || std::hypot(pad.mX - x, pad.mY - y) < 20.0;
+            if (blocked)
+                continue;
+            const bool wantMine = pOptions.mMines && (!pOptions.mHazards || placed % 2 == 0);
+            if (wantMine)
+            {
+                Mine mine;
+                mine.mX = x;
+                mine.mY = y;
+                mine.mRadius = 2.1;
+                track.mMines.push_back(mine);
+            }
+            else
+            {
+                HazardZone zone;
+                zone.mX = x;
+                zone.mY = y;
+                zone.mRadius = pRoadHalfWidth * 0.5;
+                zone.mSpeedLossPerSecond = 0.75;
+                track.mHazardZones.push_back(zone);
+            }
+            ++placed;
+        }
     }
 
     const std::string problem = track.Validate();

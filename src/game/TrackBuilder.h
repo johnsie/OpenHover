@@ -24,10 +24,18 @@ struct BuiltTrack
 // A track id from a display name: lower case letters and digits with single hyphens.
 std::string MakeTrackId(const std::string& pName);
 
+// Extras the builder can scatter along the straights.
+struct BuilderOptions
+{
+    bool mMines = false;   // a mine in the middle lane of some long straights
+    bool mHazards = false; // a slowing hazard zone on others
+};
+
 // Turns the corner points a player placed (a closed loop, in driving order) into a complete,
 // valid track: it adds a start straight on the longest side, picks four checkpoints, bridges every
 // crossing, adds boost pads on long straights, and runs the same validation as any track file.
 BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAuthor,
-                                const std::vector<EditorPoint>& pPoints, double pRoadHalfWidth);
+                                const std::vector<EditorPoint>& pPoints, double pRoadHalfWidth,
+                                const BuilderOptions& pOptions = BuilderOptions());
 
 #endif

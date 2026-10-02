@@ -2555,11 +2555,11 @@ void DrawPauseOverlay(int pSelection, bool pControllerConnected, bool pSteeringA
     DrawPixelText("PAUSED", left + 104, top + 22, 4);
     const char* cameraDistances[] = {"NEAR", "MEDIUM", "FAR"};
     const char* actions[] = {"RESUME", "STEERING ASSIST", "BRAKING ASSIST",
-                             "CAMERA DISTANCE", "CAMERA MOTION", "MENU VOLUME", "RACE VOLUME",
+                             "CAMERA DISTANCE", "CAMERA MOTION", "HUD TEXT", "MENU VOLUME", "RACE VOLUME",
                              "KEY BINDINGS", "MAIN MENU", "EXIT OPENHOVER"};
-    for (int action = 0; action < 10; ++action)
+    for (int action = 0; action < 11; ++action)
     {
-        const int actionTop = top + 70 + action * 44;
+        const int actionTop = top + 70 + action * 40;
         const bool selected = action == pSelection;
         glColor3f(selected ? 0.12f : 0.03f, selected ? 0.52f : 0.1f,
                   selected ? 0.62f : 0.14f);
@@ -2580,10 +2580,12 @@ void DrawPauseOverlay(int pSelection, bool pControllerConnected, bool pSteeringA
             DrawPixelText(cameraDistances[pCameraDistanceSetting], left + 262, actionTop + 10, 2);
         else if (action == 4)
             DrawPixelText(CameraMotionName(gCameraMotion), left + 238, actionTop + 10, 2);
-        else if (action == 5 || action == 6)
+        else if (action == 5)
+            DrawPixelText(gHudTextLarge ? "LARGE" : "NORMAL", left + 262, actionTop + 10, 2);
+        else if (action == 6 || action == 7)
         {
             char volume[8];
-            std::snprintf(volume, sizeof(volume), "%d", action == 5 ? pMenuVolume : pRaceVolume);
+            std::snprintf(volume, sizeof(volume), "%d", action == 6 ? pMenuVolume : pRaceVolume);
             DrawPixelText(volume, left + 292, actionTop + 10, 2);
         }
     }
@@ -2911,6 +2913,8 @@ struct TrackEditorState
     // Index in gLocalTracks of the track this editor last saved, so saving again after more edits
     // replaces it instead of being refused as a duplicate name.
     int mSavedIndex = -1;
+    bool mMines = false;   // scatter mines along long straights
+    bool mHazards = false; // scatter slowing hazard zones along long straights
 };
 TrackEditorState gEditor;
 constexpr double kEditorWorldHalf = 600.0;
@@ -2966,7 +2970,11 @@ double EditorSnap(double pValue)
 
 void RefreshEditorBuild()
 {
-    gEditor.mBuilt = BuildTrackFromPoints(gEditor.mName, gPlayerDisplayName, gEditor.mPoints, gEditor.mHalfWidth);
+    BuilderOptions options;
+    options.mMines = gEditor.mMines;
+    options.mHazards = gEditor.mHazards;
+    gEditor.mBuilt = BuildTrackFromPoints(gEditor.mName, gPlayerDisplayName, gEditor.mPoints,
+                                          gEditor.mHalfWidth, options);
 }
 
 // Buttons down the right-hand panel, top to bottom.
@@ -2975,6 +2983,8 @@ enum EditorButton
     kEditorName,
     kEditorNarrower,
     kEditorWider,
+    kEditorMines,
+    kEditorHazards,
     kEditorUndo,
     kEditorClear,
     kEditorSave,
@@ -2989,15 +2999,18 @@ void EditorButtonRect(const EditorLayout& pLayout, int pButton, int& pLeft, int&
     pWidth = pLayout.mPanelWidth;
     pHeight = 38;
     pTop = pLayout.mCanvasTop + 4 + pButton * 46;
-    if (pButton == kEditorNarrower || pButton == kEditorWider)
+    // Rows: name, narrower/wider, mines/hazards, then one button per row.
+    if (pButton == kEditorNarrower || pButton == kEditorWider || pButton == kEditorMines
+        || pButton == kEditorHazards)
     {
         pWidth = (pLayout.mPanelWidth - 8) / 2;
-        if (pButton == kEditorWider)
+        const bool right = pButton == kEditorWider || pButton == kEditorHazards;
+        if (right)
             pLeft += pWidth + 8;
-        pTop = pLayout.mCanvasTop + 4 + kEditorNarrower * 46;
+        pTop = pLayout.mCanvasTop + 4 + (pButton <= kEditorWider ? 1 : 2) * 46;
     }
-    else if (pButton > kEditorWider)
-        pTop = pLayout.mCanvasTop + 4 + (pButton - 1) * 46;
+    else if (pButton > kEditorHazards)
+        pTop = pLayout.mCanvasTop + 4 + (pButton - 2) * 46;
 }
 
 void DrawTrackEditor(int pWidth, int pHeight)
@@ -3079,6 +3092,12 @@ void DrawTrackEditor(int pWidth, int pHeight)
         glColor3f(1.0f, 0.5f, 0.15f);
         for (const RaisedSection& section : track.mRaisedSections)
             marker(section.mX, section.mY, 6);
+        glColor3f(1.0f, 0.25f, 0.25f);
+        for (const Mine& mine : track.mMines)
+            marker(mine.mX, mine.mY, 4);
+        glColor3f(0.75f, 0.35f, 1.0f);
+        for (const HazardZone& zone : track.mHazardZones)
+            marker(zone.mX, zone.mY, 5);
         glColor3f(0.2f, 1.0f, 0.4f);
         marker(track.mWaypoints.front().mX, track.mWaypoints.front().mY, 7);
     }
@@ -3126,7 +3145,7 @@ void DrawTrackEditor(int pWidth, int pHeight)
         DrawPixelText(gEditor.mStatus.c_str(), layout.mCanvasLeft, layout.mCanvasTop + layout.mCanvasSize + 40, 2);
     }
     glColor3f(0.55f, 0.62f, 0.66f);
-    DrawPixelText("GREEN START  YELLOW CHECKPOINT  ORANGE BRIDGE  BLUE PAD", layout.mCanvasLeft,
+    DrawPixelText("GREEN START  YELLOW GATE  ORANGE BRIDGE  BLUE PAD  RED MINE  PURPLE HAZARD", layout.mCanvasLeft,
                   layout.mCanvasTop + layout.mCanvasSize + 68, 2);
 
     // Buttons.
@@ -3137,7 +3156,8 @@ void DrawTrackEditor(int pWidth, int pHeight)
         int width = 0;
         int height = 0;
         EditorButtonRect(layout, button, left, top, width, height);
-        const bool active = button == kEditorName && gEditor.mNaming;
+        const bool active = (button == kEditorName && gEditor.mNaming)
+            || (button == kEditorMines && gEditor.mMines) || (button == kEditorHazards && gEditor.mHazards);
         glColor3f(active ? 0.12f : 0.14f, active ? 0.52f : 0.2f, active ? 0.62f : 0.28f);
         glBegin(GL_QUADS);
         glVertex2i(left, top);
@@ -3156,6 +3176,12 @@ void DrawTrackEditor(int pWidth, int pHeight)
             break;
         case kEditorWider:
             label = "WIDER";
+            break;
+        case kEditorMines:
+            label = gEditor.mMines ? "MINES ON" : "MINES OFF";
+            break;
+        case kEditorHazards:
+            label = gEditor.mHazards ? "HAZARDS ON" : "HAZARDS OFF";
             break;
         case kEditorUndo:
             label = "UNDO POINT";
@@ -3185,7 +3211,7 @@ void DrawTrackEditor(int pWidth, int pHeight)
     char widthLine[48];
     std::snprintf(widthLine, sizeof(widthLine), "ROAD WIDTH %d", static_cast<int>(gEditor.mHalfWidth * 2.0));
     glColor3f(0.72f, 0.78f, 0.82f);
-    DrawPixelText(widthLine, layout.mPanelLeft, layout.mCanvasTop + 4 + (kEditorBack) * 46 + 10, 2);
+    DrawPixelText(widthLine, layout.mPanelLeft, layout.mCanvasTop + 4 + (kEditorButtonCount - 1) * 46 + 10, 2);
 }
 
 void DrawFrontScreen(FrontScreen pScreen, int pSelection, int pCameraDistanceSetting,
@@ -6036,6 +6062,15 @@ int main(int pArgumentCount, char* pArguments[])
                         gEditor.mStatus.clear();
                         RefreshEditorBuild();
                     }
+                    else if (clicked == kEditorMines || clicked == kEditorHazards)
+                    {
+                        if (clicked == kEditorMines)
+                            gEditor.mMines = !gEditor.mMines;
+                        else
+                            gEditor.mHazards = !gEditor.mHazards;
+                        gEditor.mStatus.clear();
+                        RefreshEditorBuild();
+                    }
                     else if (clicked == kEditorUndo)
                     {
                         if (!gEditor.mPoints.empty())
@@ -6311,9 +6346,9 @@ int main(int pArgumentCount, char* pArguments[])
                 {
                     const int left = (drawableWidth - 760) / 2;
                     const int top = (drawableHeight - 536) / 2;
-                    const int option = (mouseY - (top + 70)) / 44;
-                    if (option >= 0 && option < 10
-                        && IsPointInRect(mouseX, mouseY, left + 24, top + 70 + option * 44, 326, 34))
+                    const int option = (mouseY - (top + 70)) / 40;
+                    if (option >= 0 && option < 11
+                        && IsPointInRect(mouseX, mouseY, left + 24, top + 70 + option * 40, 326, 34))
                     {
                         pauseMenuSelection = option;
                         if (option == 0)
@@ -6340,22 +6375,27 @@ int main(int pArgumentCount, char* pArguments[])
                         }
                         else if (option == 5)
                         {
-                            audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
+                            gHudTextLarge = !gHudTextLarge;
                             savePreferences();
                         }
                         else if (option == 6)
                         {
-                            audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                            audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
                             savePreferences();
                         }
                         else if (option == 7)
                         {
+                            audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                            savePreferences();
+                        }
+                        else if (option == 8)
+                        {
                             gRemapOpen = true;
                             gRemapCapturing = false;
                         }
-                        else if (option == 8)
-                            returnToMainMenu();
                         else if (option == 9)
+                            returnToMainMenu();
+                        else if (option == 10)
                             running = false;
                     }
                 }
@@ -6738,9 +6778,9 @@ int main(int pArgumentCount, char* pArguments[])
             if (pauseMenuOpen)
             {
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_UP)
-                    pauseMenuSelection = (pauseMenuSelection + 9) % 10;
+                    pauseMenuSelection = (pauseMenuSelection + 10) % 11;
                 else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_DOWN)
-                    pauseMenuSelection = (pauseMenuSelection + 1) % 10;
+                    pauseMenuSelection = (pauseMenuSelection + 1) % 11;
                 else if (event.type == SDL_KEYDOWN
                          && (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
                 {
@@ -6768,11 +6808,16 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                     else if (pauseMenuSelection == 5)
                     {
+                        gHudTextLarge = !gHudTextLarge;
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 6)
+                    {
                         const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
                         audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + direction * 0.1);
                         savePreferences();
                     }
-                    else if (pauseMenuSelection == 6)
+                    else if (pauseMenuSelection == 7)
                     {
                         const int direction = event.key.keysym.sym == SDLK_LEFT ? -1 : 1;
                         audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + direction * 0.1);
@@ -6806,22 +6851,27 @@ int main(int pArgumentCount, char* pArguments[])
                     }
                     else if (pauseMenuSelection == 5)
                     {
-                        audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
+                        gHudTextLarge = !gHudTextLarge;
                         savePreferences();
                     }
                     else if (pauseMenuSelection == 6)
                     {
-                        audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                        audioFeedback.SetMenuVolume(audioFeedback.MenuVolume() + 0.1);
                         savePreferences();
                     }
                     else if (pauseMenuSelection == 7)
                     {
+                        audioFeedback.SetRaceVolume(audioFeedback.RaceVolume() + 0.1);
+                        savePreferences();
+                    }
+                    else if (pauseMenuSelection == 8)
+                    {
                         gRemapOpen = true;
                         gRemapCapturing = false;
                     }
-                    else if (pauseMenuSelection == 8)
-                        returnToMainMenu();
                     else if (pauseMenuSelection == 9)
+                        returnToMainMenu();
+                    else if (pauseMenuSelection == 10)
                         running = false;
                 }
                 continue;

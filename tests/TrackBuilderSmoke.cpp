@@ -97,6 +97,37 @@ int main()
     expect(IsOnlineSafeTrack(oval.mTrack) && CheckOnlineTrackLimits(oval.mTrack).empty(),
            "a built track can be hosted online");
 
+    // Optional mines and hazard zones: absent by default, present when asked, always on the road and
+    // clear of the start grid (Validate checks that), and a rival can still finish a lap.
+    expect(BuildTrackFromPoints("Plain", "tester", Ring(10, 300, 200), 8.0).mTrack.mMines.empty()
+               && oval.mTrack.mHazardZones.empty(),
+           "no hazards unless asked for");
+    BuilderOptions both;
+    both.mMines = true;
+    both.mHazards = true;
+    const BuiltTrack hazardous = BuildTrackFromPoints("Hazard Oval", "tester", Ring(10, 300, 200), 8.0, both);
+    expect(hazardous.mOk && !hazardous.mTrack.mMines.empty() && !hazardous.mTrack.mHazardZones.empty(),
+           "asking for both gives mines and hazard zones");
+    BuilderOptions minesOnly;
+    minesOnly.mMines = true;
+    const BuiltTrack mined = BuildTrackFromPoints("Mined Oval", "tester", Ring(10, 300, 200), 8.0, minesOnly);
+    expect(mined.mOk && !mined.mTrack.mMines.empty() && mined.mTrack.mHazardZones.empty(),
+           "mines only gives no hazard zones");
+    BuilderOptions hazardsOnly;
+    hazardsOnly.mHazards = true;
+    const BuiltTrack zoned = BuildTrackFromPoints("Zoned Oval", "tester", Ring(10, 300, 200), 8.0, hazardsOnly);
+    expect(zoned.mOk && zoned.mTrack.mMines.empty() && !zoned.mTrack.mHazardZones.empty(),
+           "hazards only gives no mines");
+    const double hazardLap = RivalLapSeconds(hazardous.mTrack);
+    expect(hazardLap > 15.0 && hazardLap < 250.0, "a rival can still drive a lap through mines and hazards");
+    const BuiltTrack hazardEight = BuildTrackFromPoints("Hazard Eight", "tester", eight, 8.0, both);
+    expect(hazardEight.mOk, "a figure eight with hazards builds");
+    TrackDefinition hazardReloaded;
+    expect(ParseTrack(SerializeTrack(hazardous.mTrack), hazardReloaded).empty()
+               && hazardReloaded.Validate().empty() && IsOnlineSafeTrack(hazardous.mTrack)
+               && CheckOnlineTrackLimits(hazardous.mTrack).empty(),
+           "a track with hazards saves, reloads and can be hosted online");
+
     // Two roads crossing at a shallow angle cannot be bridged sensibly.
     std::vector<EditorPoint> shallow = {{-300, 0}, {300, 20}, {300, 80}, {-300, -10}, {-300, -200}, {0, -250}};
     const BuiltTrack shallowResult = BuildTrackFromPoints("Shallow", "me", shallow, 8.0);
