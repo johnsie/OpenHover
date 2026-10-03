@@ -59,6 +59,7 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
     mHazardZones = track.mHazardZones;
     mMines = track.mMines;
     mRaisedSections = track.mRaisedSections;
+    mGround = track.Ground();
     const RaceGate finish = track.Finish();
     mFinish = finish;
     const RaceGate turn = track.mWaypoints.empty() ? finish : track.mWaypoints.front();
@@ -94,6 +95,7 @@ bool AuthoritativeRace::Start(const std::vector<LobbyPlayerId>& pPlayerIds, int 
         spawn.mY = finish.mY + forwardY * (7.0 - index / 3 * 4.0) + sideY * ((index % 3 - 1) * 3.2);
         spawn.mHeading = std::atan2(forwardY, forwardX);
         spawn.mTravelHeading = spawn.mHeading;
+        spawn.mGroundHeight = mGround.HeightAt(spawn.mX, spawn.mY);
         racer.mHovercraft.Reset(spawn);
         if (index >= static_cast<int>(pPlayerIds.size()))
         {
@@ -172,7 +174,7 @@ void AuthoritativeRace::Step()
             const RaceGate& target = progress.mNextCheckpoint < static_cast<int>(mCheckpoints.size())
                 ? mCheckpoints[progress.mNextCheckpoint] : mFinish;
             HovercraftState state = racer.mHovercraft.State();
-            if (RecoverHovercraftToRoute(state, *mCourse, target, forced))
+            if (RecoverHovercraftToRoute(state, *mCourse, target, forced, &mGround))
             {
                 racer.mHovercraft.Reset(state);
                 // A recovered rival re-aims at the waypoint ahead of its new position.
@@ -185,7 +187,8 @@ void AuthoritativeRace::Step()
         {
             racer.mRivalController->Update(racer.mHovercraft.State());
             racer.mInput = racer.mRivalController->InputFor(racer.mHovercraft.State(), others);
-            racer.mInput.mJump = ShouldJumpRaisedSection(racer.mHovercraft.State(), mRaisedSections);
+            racer.mInput.mJump = ShouldJumpRaisedSection(racer.mHovercraft.State(), mRaisedSections)
+                || ShouldJumpGroundStep(racer.mHovercraft.State(), mGround);
         }
         HovercraftInput input = racer.mInput;
         if (!racer.mRivalController)
@@ -221,7 +224,8 @@ void AuthoritativeRace::Step()
         ResolveCourseWallCollision(state, *mCourse);
         for (const BoostPad& pad : mBoostPads)
             ApplyBoostPad(state, pad);
-        state.mSurfaceHeight = 0.0;
+        ResolveGroundStep(state, mGround);
+        state.mSurfaceHeight = state.mGroundHeight;
         for (const RaisedSection& section : mRaisedSections)
         {
             LandOnRaisedSection(state, section);

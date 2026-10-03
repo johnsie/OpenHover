@@ -93,7 +93,16 @@ BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAu
             longest = index;
         }
     }
-    if (longestLength < 60.0)
+    if (pOptions.mStartSide >= 0 && pOptions.mStartSide < static_cast<int>(pPoints.size()))
+    {
+        // The caller chose where the start goes.
+        longest = static_cast<std::size_t>(pOptions.mStartSide);
+        const EditorPoint& next = pPoints[(longest + 1) % pPoints.size()];
+        longestLength = std::hypot(next.mX - pPoints[longest].mX, next.mY - pPoints[longest].mY);
+    }
+    // The starting grid needs about 20 metres of straight road either side of the start; the
+    // validation below checks that it really fits, so this only rules out hopeless cases.
+    if (longestLength < 20.0)
         return Failure("THE TRACK IS TOO SMALL - SPREAD THE POINTS OUT");
 
     const double gateRadius = pRoadHalfWidth + 0.5;
@@ -112,6 +121,20 @@ BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAu
     {
         const EditorPoint& point = pPoints[(longest + offset) % pPoints.size()];
         track.mWaypoints.push_back({point.mX, point.mY, gateRadius});
+    }
+
+    if (pOptions.mHeights.size() == pPoints.size())
+    {
+        // The start waypoint sits halfway along its side, the rest follow the points. The ground
+        // must not step within reach of the starting grid.
+        const std::size_t size = pPoints.size();
+        if (pOptions.mHeights[(longest + size - 1) % size] != pOptions.mHeights[longest] && longestLength < 60.0)
+            return Failure("A STEP IN THE GROUND IS TOO CLOSE BEHIND THE START");
+        if (pOptions.mHeights[(longest + 1) % size] != pOptions.mHeights[longest] && longestLength < 20.0)
+            return Failure("A STEP IN THE GROUND IS TOO CLOSE AHEAD OF THE START");
+        track.mGroundHeights.push_back(pOptions.mHeights[longest]);
+        for (std::size_t offset = 1; offset <= size; ++offset)
+            track.mGroundHeights.push_back(pOptions.mHeights[(longest + offset) % size]);
     }
 
     // Four checkpoints at corners, spread evenly around the lap; the last is the final corner.
@@ -178,7 +201,7 @@ BuiltTrack BuildTrackFromPoints(const std::string& pName, const std::string& pAu
     }
 
     // Boost pads in the middle of long straights, away from the start and from any bridge.
-    for (std::size_t index = 1; index + 1 < count && track.mBoostPads.size() < 8; ++index)
+    for (std::size_t index = 1; pOptions.mPads && index + 1 < count && track.mBoostPads.size() < 8; ++index)
     {
         const RaceGate& a = track.mWaypoints[index];
         const RaceGate& b = track.mWaypoints[(index + 1) % count];

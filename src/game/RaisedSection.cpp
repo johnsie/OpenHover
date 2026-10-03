@@ -7,7 +7,7 @@ bool ResolveRaisedSectionCollision(HovercraftState& pState, const RaisedSection&
                                    double pCraftRadius, double pRestitution)
 {
     if (pSection.mHalfLength <= 0.0 || pSection.mHalfWidth <= 0.0
-        || pState.mHeight >= pSection.mClearHeight)
+        || pState.mHeight - pState.mGroundHeight >= pSection.mClearHeight)
     {
         return false;
     }
@@ -108,7 +108,7 @@ bool LandOnRaisedSection(HovercraftState& pState, const RaisedSection& pSection,
         return false;
     }
 
-    const double surfaceHeight = pSection.mClearHeight - 0.1 + pHoverClearance;
+    const double surfaceHeight = pState.mGroundHeight + pSection.mClearHeight - 0.1 + pHoverClearance;
     if (pState.mHeight < surfaceHeight - pLandingTolerance)
         return false;
     pState.mSurfaceHeight = surfaceHeight;

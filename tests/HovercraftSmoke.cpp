@@ -124,7 +124,7 @@ int main()
             || (NearlyEqual(jumpingHovercraft.State().mHeight, 1.2, 0.0001)
                 && jumpingHovercraft.State().mVerticalSpeed > 0.0);
     }
-    if (peakHeight < 1.45 || peakHeight > 2.5 || airborneSteps < 60 || airborneSteps > 150
+    if (peakHeight < 2.4 || peakHeight > 3.4 || airborneSteps < 70 || airborneSteps > 230
         || !descendedAfterPeak || !landedWithRebound
         || !NearlyEqual(jumpingHovercraft.State().mHeight, 1.2, 0.01))
     {

@@ -115,6 +115,13 @@ and recover from a short interruption with agreed authoritative results and no u
   validated by timing data. Avoid shortcuts that create ambiguous lap validation.
 - Use elevation, jumps, hazards, pads, and weapons deliberately, with safe sight lines and a
   recoverable outcome for every failed attempt.
+- Floor height is in the track format (level stretches with drops to fall off and steps up to jump,
+  drawn and validated the same way online and offline); review it on real tracks for sight
+  lines and recoverable landings, and add editor controls for it. Follow it with
+  **ceilings** (a low roof that limits jump height and is visible in the road geometry) and
+  **stacked rooms** (one road passing over or under another at a different level, replacing the
+  bridge-only crossings), including the room-based track converter reading those values. Each step
+  needs a safe sight line, a recoverable failure, and a bump to the track content version.
 - Add screenshot and gameplay-review gates for desktop and common low-resolution layouts; fix
   overlap, contrast, framing, and unreadable turn problems before expanding content.
 - Build additional tracks only after the first three meet their readability and replayability

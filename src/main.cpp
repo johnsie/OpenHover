@@ -19,6 +19,7 @@
 #include "KeyBindings.h"
 #include "PadBindings.h"
 #include "PadMenuInput.h"
+#include "PixelFont.h"
 #include "PracticeGuide.h"
 #include "Protocol.h"
 #include "Race.h"
@@ -43,6 +44,7 @@
 #include "WallCollision.h"
 
 #include <cmath>
+#include <functional>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -674,18 +676,23 @@ bool ApplyMines(Hovercraft& pHovercraft, std::vector<Mine>& pMines)
     return false;
 }
 
-void ApplyRaisedSections(Hovercraft& pHovercraft, const std::vector<RaisedSection>& pSections)
+void ApplyRaisedSections(Hovercraft& pHovercraft, const std::vector<RaisedSection>& pSections,
+                         const GroundProfile& pGround)
 {
+    const auto raisedLevel = [](const HovercraftState& pState)
+    {
+        return pState.mSurfaceHeight > pState.mGroundHeight ? pState.mSurfaceHeight - pState.mGroundHeight : 0.0;
+    };
+    const double previousSurfaceHeight = raisedLevel(pHovercraft.State());
+    pHovercraft.ApplyGround(pGround);
     HovercraftState state = pHovercraft.State();
-    const double previousSurfaceHeight = state.mSurfaceHeight;
     const double previousHeight = state.mHeight;
     const double previousVerticalSpeed = state.mVerticalSpeed;
-    state.mSurfaceHeight = 0.0;
     for (const RaisedSection& section : pSections)
     {
         if (LandOnRaisedSection(state, section))
         {
-            if (state.mSurfaceHeight != previousSurfaceHeight || state.mHeight != previousHeight
+            if (raisedLevel(state) != previousSurfaceHeight || state.mHeight != previousHeight
                 || state.mVerticalSpeed != previousVerticalSpeed)
             {
                 pHovercraft.Reset(state);
@@ -698,7 +705,7 @@ void ApplyRaisedSections(Hovercraft& pHovercraft, const std::vector<RaisedSectio
             return;
         }
     }
-    if (state.mSurfaceHeight != previousSurfaceHeight)
+    if (raisedLevel(state) != previousSurfaceHeight)
         pHovercraft.Reset(state);
 }
 
@@ -738,15 +745,15 @@ void SetPerspective(double pAspect, double pSpeed, double pZoomScale = 1.0)
 }
 
 void SetChaseCamera(const HovercraftState& pState, double pDistance, double pHeading,
-                    double pRise)
+                    double pRise, double pGround)
 {
     const double forwardX = std::cos(pHeading);
     const double forwardZ = std::sin(pHeading);
     const double eyeX = pState.mX - forwardX * pDistance;
-    const double eyeY = 2.3 + pDistance * 0.09 + pRise;
+    const double eyeY = 2.3 + pDistance * 0.09 + pRise + pGround;
     const double eyeZ = pState.mY - forwardZ * pDistance;
     const double targetX = pState.mX + forwardX * pDistance * 0.8;
-    const double targetY = 1.55 + pRise * 0.8;
+    const double targetY = 1.55 + pRise * 0.8 + pGround;
     const double targetZ = pState.mY + forwardZ * pDistance * 0.8;
     double viewX = targetX - eyeX;
     double viewY = targetY - eyeY;
@@ -868,6 +875,15 @@ void DrawCourseGrid(const HovercraftState& pState)
     glEnd();
 }
 
+// The ground the track is drawn on; null draws everything on the flat.
+const GroundProfile* gDrawGround = nullptr;
+
+// A vertex lifted by the height of the ground beneath it.
+void GroundVertex(double pX, double pY, double pZ)
+{
+    glVertex3d(pX, pY + (gDrawGround != nullptr ? gDrawGround->HeightAt(pX, pZ) : 0.0), pZ);
+}
+
 void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
                      double pHalfWidth)
 {
@@ -880,51 +896,51 @@ void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
     const double sideZ = directionX / length * pHalfWidth;
     glColor3f(0.68f, 0.76f, 0.78f);
     glBegin(GL_QUADS);
-    glVertex3d(pStartX + sideX, roadHeight, pStartZ + sideZ);
-    glVertex3d(pStartX - sideX, roadHeight, pStartZ - sideZ);
-    glVertex3d(pEndX - sideX, roadHeight, pEndZ - sideZ);
-    glVertex3d(pEndX + sideX, roadHeight, pEndZ + sideZ);
+    GroundVertex(pStartX + sideX, roadHeight, pStartZ + sideZ);
+    GroundVertex(pStartX - sideX, roadHeight, pStartZ - sideZ);
+    GroundVertex(pEndX - sideX, roadHeight, pEndZ - sideZ);
+    GroundVertex(pEndX + sideX, roadHeight, pEndZ + sideZ);
     glEnd();
 
     glColor3f(0.84f, 0.9f, 0.91f);
     glBegin(GL_QUADS);
-    glVertex3d(pStartX + sideX, 0.0, pStartZ + sideZ);
-    glVertex3d(pStartX + sideX, wallHeight, pStartZ + sideZ);
-    glVertex3d(pEndX + sideX, wallHeight, pEndZ + sideZ);
-    glVertex3d(pEndX + sideX, 0.0, pEndZ + sideZ);
-    glVertex3d(pStartX - sideX, wallHeight, pStartZ - sideZ);
-    glVertex3d(pStartX - sideX, 0.0, pStartZ - sideZ);
-    glVertex3d(pEndX - sideX, 0.0, pEndZ - sideZ);
-    glVertex3d(pEndX - sideX, wallHeight, pEndZ - sideZ);
+    GroundVertex(pStartX + sideX, 0.0, pStartZ + sideZ);
+    GroundVertex(pStartX + sideX, wallHeight, pStartZ + sideZ);
+    GroundVertex(pEndX + sideX, wallHeight, pEndZ + sideZ);
+    GroundVertex(pEndX + sideX, 0.0, pEndZ + sideZ);
+    GroundVertex(pStartX - sideX, wallHeight, pStartZ - sideZ);
+    GroundVertex(pStartX - sideX, 0.0, pStartZ - sideZ);
+    GroundVertex(pEndX - sideX, 0.0, pEndZ - sideZ);
+    GroundVertex(pEndX - sideX, wallHeight, pEndZ - sideZ);
     glEnd();
 
     glColor3f(0.08f, 0.74f, 0.8f);
     glBegin(GL_LINES);
-    glVertex3d(pStartX + sideX, wallHeight, pStartZ + sideZ);
-    glVertex3d(pEndX + sideX, wallHeight, pEndZ + sideZ);
-    glVertex3d(pStartX - sideX, wallHeight, pStartZ - sideZ);
-    glVertex3d(pEndX - sideX, wallHeight, pEndZ - sideZ);
+    GroundVertex(pStartX + sideX, wallHeight, pStartZ + sideZ);
+    GroundVertex(pEndX + sideX, wallHeight, pEndZ + sideZ);
+    GroundVertex(pStartX - sideX, wallHeight, pStartZ - sideZ);
+    GroundVertex(pEndX - sideX, wallHeight, pEndZ - sideZ);
     for (double offset = 0.0; offset <= length; offset += 4.0)
     {
         const double postX = pStartX + directionX / length * std::fmin(offset, length);
         const double postZ = pStartZ + directionZ / length * std::fmin(offset, length);
-        glVertex3d(postX + sideX, roadHeight, postZ + sideZ);
-        glVertex3d(postX + sideX, wallHeight, postZ + sideZ);
-        glVertex3d(postX - sideX, roadHeight, postZ - sideZ);
-        glVertex3d(postX - sideX, wallHeight, postZ - sideZ);
+        GroundVertex(postX + sideX, roadHeight, postZ + sideZ);
+        GroundVertex(postX + sideX, wallHeight, postZ + sideZ);
+        GroundVertex(postX - sideX, roadHeight, postZ - sideZ);
+        GroundVertex(postX - sideX, wallHeight, postZ - sideZ);
     }
     glEnd();
 
     glColor3f(0.96f, 0.48f, 0.14f);
     glBegin(GL_QUADS);
-    glVertex3d(pStartX + sideX * 0.82, roadHeight + 0.012, pStartZ + sideZ * 0.82);
-    glVertex3d(pEndX + sideX * 0.82, roadHeight + 0.012, pEndZ + sideZ * 0.82);
-    glVertex3d(pEndX + sideX, roadHeight + 0.012, pEndZ + sideZ);
-    glVertex3d(pStartX + sideX, roadHeight + 0.012, pStartZ + sideZ);
-    glVertex3d(pStartX - sideX, roadHeight + 0.012, pStartZ - sideZ);
-    glVertex3d(pEndX - sideX, roadHeight + 0.012, pEndZ - sideZ);
-    glVertex3d(pEndX - sideX * 0.82, roadHeight + 0.012, pEndZ - sideZ * 0.82);
-    glVertex3d(pStartX - sideX * 0.82, roadHeight + 0.012, pStartZ - sideZ * 0.82);
+    GroundVertex(pStartX + sideX * 0.82, roadHeight + 0.012, pStartZ + sideZ * 0.82);
+    GroundVertex(pEndX + sideX * 0.82, roadHeight + 0.012, pEndZ + sideZ * 0.82);
+    GroundVertex(pEndX + sideX, roadHeight + 0.012, pEndZ + sideZ);
+    GroundVertex(pStartX + sideX, roadHeight + 0.012, pStartZ + sideZ);
+    GroundVertex(pStartX - sideX, roadHeight + 0.012, pStartZ - sideZ);
+    GroundVertex(pEndX - sideX, roadHeight + 0.012, pEndZ - sideZ);
+    GroundVertex(pEndX - sideX * 0.82, roadHeight + 0.012, pEndZ - sideZ * 0.82);
+    GroundVertex(pStartX - sideX * 0.82, roadHeight + 0.012, pStartZ - sideZ * 0.82);
     glEnd();
 
     glColor3f(0.45f, 0.54f, 0.57f);
@@ -934,8 +950,8 @@ void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
         const double markerOffset = std::fmin(offset, length);
         const double centerX = pStartX + directionX / length * markerOffset;
         const double centerZ = pStartZ + directionZ / length * markerOffset;
-        glVertex3d(centerX + sideX * 0.8, roadHeight + 0.016, centerZ + sideZ * 0.8);
-        glVertex3d(centerX - sideX * 0.8, roadHeight + 0.016, centerZ - sideZ * 0.8);
+        GroundVertex(centerX + sideX * 0.8, roadHeight + 0.016, centerZ + sideZ * 0.8);
+        GroundVertex(centerX - sideX * 0.8, roadHeight + 0.016, centerZ - sideZ * 0.8);
     }
     glEnd();
 
@@ -947,13 +963,13 @@ void DrawRoadSegment(double pStartX, double pStartZ, double pEndX, double pEndZ,
         const double centerZ = pStartZ + directionZ / length * offset;
         const double forwardX = directionX / length;
         const double forwardZ = directionZ / length;
-        glVertex3d(centerX - forwardX * 0.8 + sideX * 1.01, 0.62,
+        GroundVertex(centerX - forwardX * 0.8 + sideX * 1.01, 0.62,
                    centerZ - forwardZ * 0.8 + sideZ * 1.01);
-        glVertex3d(centerX + forwardX * 0.8 + sideX * 1.01, 0.62,
+        GroundVertex(centerX + forwardX * 0.8 + sideX * 1.01, 0.62,
                    centerZ + forwardZ * 0.8 + sideZ * 1.01);
-        glVertex3d(centerX + forwardX * 0.8 + sideX * 1.01, 1.2,
+        GroundVertex(centerX + forwardX * 0.8 + sideX * 1.01, 1.2,
                    centerZ + forwardZ * 0.8 + sideZ * 1.01);
-        glVertex3d(centerX - forwardX * 0.8 + sideX * 1.01, 1.2,
+        GroundVertex(centerX - forwardX * 0.8 + sideX * 1.01, 1.2,
                    centerZ - forwardZ * 0.8 + sideZ * 1.01);
     }
     glEnd();
@@ -1006,6 +1022,25 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
 
     const double roadHeight = 0.35;
     const double wallHeight = 5.4;
+    // The ground is level along each stretch of route and steps at the waypoints: every edge is
+    // drawn at the height of the stretch before it and then, if the ground steps there, again at the
+    // height of the stretch after it, which makes the vertical face of the step.
+    const int edgeCount = static_cast<int>(edges.size());
+    const bool stepped = gDrawGround != nullptr && !gDrawGround->Flat();
+    const auto segmentHeight = [&](int pIndex)
+    {
+        const int wrapped = ((pIndex % edgeCount) + edgeCount) % edgeCount;
+        return stepped ? gDrawGround->SegmentHeight(static_cast<std::size_t>(wrapped)) : 0.0;
+    };
+    const auto atEdge = [&](int pIndex, bool pBefore, bool pAfter, const std::function<void(double)>& pDraw)
+    {
+        const double before = segmentHeight(pIndex - 1);
+        const double after = segmentHeight(pIndex);
+        if (pBefore && (before != after || !pAfter))
+            pDraw(before);
+        if (pAfter)
+            pDraw(after);
+    };
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, pRoadTexture);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
@@ -1027,27 +1062,54 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
             const double deltaZ = centerZ - previousCenterZ;
             textureDistance += std::sqrt(deltaX * deltaX + deltaZ * deltaZ);
         }
-        glTexCoord2d(textureDistance / 12.0, 0.0);
-        glVertex3d(edge.mLeftX, roadHeight, edge.mLeftZ);
-        glTexCoord2d(textureDistance / 12.0, 3.0);
-        glVertex3d(edge.mRightX, roadHeight, edge.mRightZ);
+        atEdge(index, index > 0, index < edgeCount, [&](double pHeight)
+        {
+            glTexCoord2d(textureDistance / 12.0, 0.0);
+            glVertex3d(edge.mLeftX, roadHeight + pHeight, edge.mLeftZ);
+            glTexCoord2d(textureDistance / 12.0, 3.0);
+            glVertex3d(edge.mRightX, roadHeight + pHeight, edge.mRightZ);
+        });
     }
     glEnd();
+    if (segmentHeight(-1) != segmentHeight(0))
+    {
+        // The step where the loop closes.
+        const double low = segmentHeight(-1);
+        const double high = segmentHeight(0);
+        glBegin(GL_QUADS);
+        glTexCoord2d(0.0, 0.0);
+        glVertex3d(edges[0].mLeftX, roadHeight + low, edges[0].mLeftZ);
+        glTexCoord2d(0.0, 3.0);
+        glVertex3d(edges[0].mRightX, roadHeight + low, edges[0].mRightZ);
+        glTexCoord2d(1.0, 3.0);
+        glVertex3d(edges[0].mRightX, roadHeight + high, edges[0].mRightZ);
+        glTexCoord2d(1.0, 0.0);
+        glVertex3d(edges[0].mLeftX, roadHeight + high, edges[0].mLeftZ);
+        glEnd();
+    }
     glDisable(GL_TEXTURE_2D);
 
     glColor3f(0.12f, 0.62f, 0.68f);
     glBegin(GL_LINE_LOOP);
-    for (const EdgePoint& edge : edges)
+    for (int index = 0; index < edgeCount; ++index)
     {
-        glVertex3d(edge.mLeftX * 0.9 + edge.mRightX * 0.1, roadHeight + 0.014,
-                   edge.mLeftZ * 0.9 + edge.mRightZ * 0.1);
+        const EdgePoint& edge = edges[index];
+        atEdge(index, true, true, [&](double pHeight)
+        {
+            glVertex3d(edge.mLeftX * 0.9 + edge.mRightX * 0.1, roadHeight + 0.014 + pHeight,
+                       edge.mLeftZ * 0.9 + edge.mRightZ * 0.1);
+        });
     }
     glEnd();
     glBegin(GL_LINE_LOOP);
-    for (const EdgePoint& edge : edges)
+    for (int index = 0; index < edgeCount; ++index)
     {
-        glVertex3d(edge.mLeftX * 0.1 + edge.mRightX * 0.9, roadHeight + 0.014,
-                   edge.mLeftZ * 0.1 + edge.mRightZ * 0.9);
+        const EdgePoint& edge = edges[index];
+        atEdge(index, true, true, [&](double pHeight)
+        {
+            glVertex3d(edge.mLeftX * 0.1 + edge.mRightX * 0.9, roadHeight + 0.014 + pHeight,
+                       edge.mLeftZ * 0.1 + edge.mRightZ * 0.9);
+        });
     }
     glEnd();
     glColor3f(0.48f, 0.56f, 0.59f);
@@ -1056,14 +1118,15 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
     {
         const EdgePoint& start = edges[index];
         const EdgePoint& end = edges[(index + 1) % edges.size()];
+        const double segHeight = segmentHeight(index);
         for (int column = 1; column < 3; ++column)
         {
             const double across = column / 3.0;
             glVertex3d(start.mLeftX + (start.mRightX - start.mLeftX) * across,
-                       roadHeight + 0.012,
+                       roadHeight + 0.012 + segHeight,
                        start.mLeftZ + (start.mRightZ - start.mLeftZ) * across);
             glVertex3d(end.mLeftX + (end.mRightX - end.mLeftX) * across,
-                       roadHeight + 0.012,
+                       roadHeight + 0.012 + segHeight,
                        end.mLeftZ + (end.mRightZ - end.mLeftZ) * across);
         }
         const double length = std::sqrt((end.mLeftX - start.mLeftX) * (end.mLeftX - start.mLeftX)
@@ -1071,9 +1134,9 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
         for (double distance = 2.5; distance < length; distance += 2.5)
         {
             const double progress = distance / length;
-            glVertex3d(start.mLeftX + (end.mLeftX - start.mLeftX) * progress, roadHeight + 0.012,
+            glVertex3d(start.mLeftX + (end.mLeftX - start.mLeftX) * progress, roadHeight + 0.012 + segHeight,
                        start.mLeftZ + (end.mLeftZ - start.mLeftZ) * progress);
-            glVertex3d(start.mRightX + (end.mRightX - start.mRightX) * progress, roadHeight + 0.012,
+            glVertex3d(start.mRightX + (end.mRightX - start.mRightX) * progress, roadHeight + 0.012 + segHeight,
                        start.mRightZ + (end.mRightZ - start.mRightZ) * progress);
         }
     }
@@ -1099,10 +1162,13 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
             + (edge.mLeftZ - edge.mRightZ) * (edge.mLeftZ - edge.mRightZ));
         glNormal3d((edge.mLeftX - edge.mRightX) / normalLength, 0.0,
                    (edge.mLeftZ - edge.mRightZ) / normalLength);
-        glTexCoord2d(wallTextureDistance / 5.0, 0.0);
-        glVertex3d(edge.mLeftX, roadHeight, edge.mLeftZ);
-        glTexCoord2d(wallTextureDistance / 5.0, 1.0);
-        glVertex3d(edge.mLeftX, wallHeight, edge.mLeftZ);
+        atEdge(index, index > 0, index < edgeCount, [&](double pHeight)
+        {
+            glTexCoord2d(wallTextureDistance / 5.0, 0.0);
+            glVertex3d(edge.mLeftX, roadHeight + pHeight, edge.mLeftZ);
+            glTexCoord2d(wallTextureDistance / 5.0, 1.0);
+            glVertex3d(edge.mLeftX, wallHeight + pHeight, edge.mLeftZ);
+        });
     }
     glEnd();
     wallTextureDistance = 0.0;
@@ -1121,22 +1187,31 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
             + (edge.mRightZ - edge.mLeftZ) * (edge.mRightZ - edge.mLeftZ));
         glNormal3d((edge.mRightX - edge.mLeftX) / normalLength, 0.0,
                    (edge.mRightZ - edge.mLeftZ) / normalLength);
-        glTexCoord2d(wallTextureDistance / 5.0, 1.0);
-        glVertex3d(edge.mRightX, wallHeight, edge.mRightZ);
-        glTexCoord2d(wallTextureDistance / 5.0, 0.0);
-        glVertex3d(edge.mRightX, roadHeight, edge.mRightZ);
+        atEdge(index, index > 0, index < edgeCount, [&](double pHeight)
+        {
+            glTexCoord2d(wallTextureDistance / 5.0, 1.0);
+            glVertex3d(edge.mRightX, wallHeight + pHeight, edge.mRightZ);
+            glTexCoord2d(wallTextureDistance / 5.0, 0.0);
+            glVertex3d(edge.mRightX, roadHeight + pHeight, edge.mRightZ);
+        });
     }
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
     glColor3f(0.08f, 0.74f, 0.8f);
     glBegin(GL_LINE_LOOP);
-    for (const EdgePoint& edge : edges)
-        glVertex3d(edge.mLeftX, wallHeight, edge.mLeftZ);
+    for (int index = 0; index < edgeCount; ++index)
+        atEdge(index, true, true, [&](double pHeight)
+        {
+            glVertex3d(edges[index].mLeftX, wallHeight + pHeight, edges[index].mLeftZ);
+        });
     glEnd();
     glBegin(GL_LINE_LOOP);
-    for (const EdgePoint& edge : edges)
-        glVertex3d(edge.mRightX, wallHeight, edge.mRightZ);
+    for (int index = 0; index < edgeCount; ++index)
+        atEdge(index, true, true, [&](double pHeight)
+        {
+            glVertex3d(edges[index].mRightX, wallHeight + pHeight, edges[index].mRightZ);
+        });
     glEnd();
 
     // Large bright chevrons on both walls point in the driving direction, so a player who has lost
@@ -1179,7 +1254,7 @@ void DrawConnectedTrack(const std::vector<RaceGate>& pWaypoints, double pHalfWid
             const double inwardZ = (side == 0 ? -acrossZ : acrossZ) / acrossLength * 0.06;
             const auto point = [&](double pCentreX, double pCentreZ, double pAlong, double pHeight)
             {
-                glVertex3d(pCentreX + forwardX * pAlong + inwardX, pHeight,
+                glVertex3d(pCentreX + forwardX * pAlong + inwardX, pHeight + segmentHeight(index),
                            pCentreZ + forwardZ * pAlong + inwardZ);
             };
             for (double distance = 6.0; distance < segmentLength - 4.0; distance += 14.0)
@@ -1210,30 +1285,30 @@ void DrawCityBuilding(double pX, double pZ, double pWidth, double pDepth, double
     const double halfDepth = pDepth * 0.5;
     glColor3f(pRed, pGreen, pBlue);
     glBegin(GL_QUADS);
-    glVertex3d(pX - halfWidth, 0.0, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, 0.0, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, 0.0, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, 0.0, pZ + halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
-    glVertex3d(pX - halfWidth, pHeight, pZ + halfDepth);
-    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX - halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ - halfDepth);
-    glVertex3d(pX + halfWidth, pHeight, pZ + halfDepth);
-    glVertex3d(pX - halfWidth, pHeight, pZ + halfDepth);
+    GroundVertex(pX - halfWidth, 0.0, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, 0.0, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX - halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, 0.0, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, 0.0, pZ + halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ + halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ + halfDepth);
+    GroundVertex(pX - halfWidth, pHeight, pZ + halfDepth);
+    GroundVertex(pX - halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX - halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ - halfDepth);
+    GroundVertex(pX + halfWidth, pHeight, pZ + halfDepth);
+    GroundVertex(pX - halfWidth, pHeight, pZ + halfDepth);
     glEnd();
 
     glColor3f(0.72f, 0.86f, 0.74f);
     glBegin(GL_LINES);
     for (double height = 4.0; height < pHeight - 2.0; height += 5.0)
     {
-        glVertex3d(pX - halfWidth - 0.02, height, pZ - halfDepth);
-        glVertex3d(pX + halfWidth + 0.02, height, pZ - halfDepth);
+        GroundVertex(pX - halfWidth - 0.02, height, pZ - halfDepth);
+        GroundVertex(pX + halfWidth + 0.02, height, pZ - halfDepth);
     }
     glEnd();
 }
@@ -1243,18 +1318,18 @@ void DrawMountain(double pX, double pZ, double pRadius, double pHeight,
 {
     glColor3f(pRed, pGreen, pBlue);
     glBegin(GL_TRIANGLES);
-    glVertex3d(pX - pRadius, 0.0, pZ - pRadius);
-    glVertex3d(pX + pRadius, 0.0, pZ - pRadius);
-    glVertex3d(pX, pHeight, pZ);
-    glVertex3d(pX + pRadius, 0.0, pZ - pRadius);
-    glVertex3d(pX + pRadius, 0.0, pZ + pRadius);
-    glVertex3d(pX, pHeight, pZ);
-    glVertex3d(pX + pRadius, 0.0, pZ + pRadius);
-    glVertex3d(pX - pRadius, 0.0, pZ + pRadius);
-    glVertex3d(pX, pHeight, pZ);
-    glVertex3d(pX - pRadius, 0.0, pZ + pRadius);
-    glVertex3d(pX - pRadius, 0.0, pZ - pRadius);
-    glVertex3d(pX, pHeight, pZ);
+    GroundVertex(pX - pRadius, 0.0, pZ - pRadius);
+    GroundVertex(pX + pRadius, 0.0, pZ - pRadius);
+    GroundVertex(pX, pHeight, pZ);
+    GroundVertex(pX + pRadius, 0.0, pZ - pRadius);
+    GroundVertex(pX + pRadius, 0.0, pZ + pRadius);
+    GroundVertex(pX, pHeight, pZ);
+    GroundVertex(pX + pRadius, 0.0, pZ + pRadius);
+    GroundVertex(pX - pRadius, 0.0, pZ + pRadius);
+    GroundVertex(pX, pHeight, pZ);
+    GroundVertex(pX - pRadius, 0.0, pZ + pRadius);
+    GroundVertex(pX - pRadius, 0.0, pZ - pRadius);
+    GroundVertex(pX, pHeight, pZ);
     glEnd();
 }
 
@@ -1262,20 +1337,20 @@ void DrawIndustrialBeacon(double pX, double pZ, double pHeight)
 {
     glColor3f(0.3f, 0.36f, 0.38f);
     glBegin(GL_QUADS);
-    glVertex3d(pX - 0.9, 0.0, pZ - 0.9);
-    glVertex3d(pX + 0.9, 0.0, pZ - 0.9);
-    glVertex3d(pX + 0.32, pHeight, pZ - 0.32);
-    glVertex3d(pX - 0.32, pHeight, pZ - 0.32);
-    glVertex3d(pX + 0.9, 0.0, pZ + 0.9);
-    glVertex3d(pX - 0.9, 0.0, pZ + 0.9);
-    glVertex3d(pX - 0.32, pHeight, pZ + 0.32);
-    glVertex3d(pX + 0.32, pHeight, pZ + 0.32);
+    GroundVertex(pX - 0.9, 0.0, pZ - 0.9);
+    GroundVertex(pX + 0.9, 0.0, pZ - 0.9);
+    GroundVertex(pX + 0.32, pHeight, pZ - 0.32);
+    GroundVertex(pX - 0.32, pHeight, pZ - 0.32);
+    GroundVertex(pX + 0.9, 0.0, pZ + 0.9);
+    GroundVertex(pX - 0.9, 0.0, pZ + 0.9);
+    GroundVertex(pX - 0.32, pHeight, pZ + 0.32);
+    GroundVertex(pX + 0.32, pHeight, pZ + 0.32);
     glEnd();
     glColor3f(1.0f, 0.68f, 0.12f);
     glBegin(GL_TRIANGLES);
-    glVertex3d(pX, pHeight + 2.2, pZ);
-    glVertex3d(pX - 0.65, pHeight, pZ);
-    glVertex3d(pX + 0.65, pHeight, pZ);
+    GroundVertex(pX, pHeight + 2.2, pZ);
+    GroundVertex(pX - 0.65, pHeight, pZ);
+    GroundVertex(pX + 0.65, pHeight, pZ);
     glEnd();
 }
 
@@ -1414,13 +1489,13 @@ void DrawFinishZone(const RaceGate& pFinish, const std::vector<RaceGate>& pWaypo
             glColor3f(color, color, color);
             glBegin(GL_QUADS);
             glNormal3d(0.0, 1.0, 0.0);
-            glVertex3d(pFinish.mX + forwardX * start + sideX * left, 0.4,
+            GroundVertex(pFinish.mX + forwardX * start + sideX * left, 0.4,
                        pFinish.mY + forwardZ * start + sideZ * left);
-            glVertex3d(pFinish.mX + forwardX * end + sideX * left, 0.4,
+            GroundVertex(pFinish.mX + forwardX * end + sideX * left, 0.4,
                        pFinish.mY + forwardZ * end + sideZ * left);
-            glVertex3d(pFinish.mX + forwardX * end + sideX * right, 0.4,
+            GroundVertex(pFinish.mX + forwardX * end + sideX * right, 0.4,
                        pFinish.mY + forwardZ * end + sideZ * right);
-            glVertex3d(pFinish.mX + forwardX * start + sideX * right, 0.4,
+            GroundVertex(pFinish.mX + forwardX * start + sideX * right, 0.4,
                        pFinish.mY + forwardZ * start + sideZ * right);
             glEnd();
         }
@@ -1438,13 +1513,13 @@ void DrawFinishZone(const RaceGate& pFinish, const std::vector<RaceGate>& pWaypo
             const float color = (row + column) % 2 == 0 ? 0.96f : 0.03f;
             glColor3f(color, color, color);
             glBegin(GL_QUADS);
-            glVertex3d(pFinish.mX + sideX * left - forwardX * 0.04, bottom,
+            GroundVertex(pFinish.mX + sideX * left - forwardX * 0.04, bottom,
                        pFinish.mY + sideZ * left - forwardZ * 0.04);
-            glVertex3d(pFinish.mX + sideX * right - forwardX * 0.04, bottom,
+            GroundVertex(pFinish.mX + sideX * right - forwardX * 0.04, bottom,
                        pFinish.mY + sideZ * right - forwardZ * 0.04);
-            glVertex3d(pFinish.mX + sideX * right - forwardX * 0.04, top,
+            GroundVertex(pFinish.mX + sideX * right - forwardX * 0.04, top,
                        pFinish.mY + sideZ * right - forwardZ * 0.04);
-            glVertex3d(pFinish.mX + sideX * left - forwardX * 0.04, top,
+            GroundVertex(pFinish.mX + sideX * left - forwardX * 0.04, top,
                        pFinish.mY + sideZ * left - forwardZ * 0.04);
             glEnd();
         }
@@ -1469,13 +1544,13 @@ void DrawGate(const RaceGate& pGate, double pDirectionX, double pDirectionZ, boo
     const double postHeight = 3.8;
     const double postHalfWidth = 0.22;
     glBegin(GL_QUADS);
-    glVertex3d(pGate.mX - forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
+    GroundVertex(pGate.mX - forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
                pGate.mY - forwardZ * 0.28 - sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
+    GroundVertex(pGate.mX + forwardX * 0.28 - sideX * gateHalfWidth, 0.4,
                pGate.mY + forwardZ * 0.28 - sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
+    GroundVertex(pGate.mX + forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
                pGate.mY + forwardZ * 0.28 + sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX - forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
+    GroundVertex(pGate.mX - forwardX * 0.28 + sideX * gateHalfWidth, 0.4,
                pGate.mY - forwardZ * 0.28 + sideZ * gateHalfWidth);
     glEnd();
     for (int side = -1; side <= 1; side += 2)
@@ -1483,28 +1558,28 @@ void DrawGate(const RaceGate& pGate, double pDirectionX, double pDirectionZ, boo
         const double postX = pGate.mX + sideX * gateHalfWidth * side;
         const double postZ = pGate.mY + sideZ * gateHalfWidth * side;
         glBegin(GL_QUADS);
-        glVertex3d(postX - forwardX * postHalfWidth, 0.36, postZ - forwardZ * postHalfWidth);
-        glVertex3d(postX + forwardX * postHalfWidth, 0.36, postZ + forwardZ * postHalfWidth);
-        glVertex3d(postX + forwardX * postHalfWidth, postHeight, postZ + forwardZ * postHalfWidth);
-        glVertex3d(postX - forwardX * postHalfWidth, postHeight, postZ - forwardZ * postHalfWidth);
+        GroundVertex(postX - forwardX * postHalfWidth, 0.36, postZ - forwardZ * postHalfWidth);
+        GroundVertex(postX + forwardX * postHalfWidth, 0.36, postZ + forwardZ * postHalfWidth);
+        GroundVertex(postX + forwardX * postHalfWidth, postHeight, postZ + forwardZ * postHalfWidth);
+        GroundVertex(postX - forwardX * postHalfWidth, postHeight, postZ - forwardZ * postHalfWidth);
         glEnd();
     }
     glBegin(GL_QUADS);
-    glVertex3d(pGate.mX - sideX * gateHalfWidth, postHeight - 0.32,
+    GroundVertex(pGate.mX - sideX * gateHalfWidth, postHeight - 0.32,
                pGate.mY - sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + sideX * gateHalfWidth, postHeight - 0.32,
+    GroundVertex(pGate.mX + sideX * gateHalfWidth, postHeight - 0.32,
                pGate.mY + sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + sideX * gateHalfWidth, postHeight,
+    GroundVertex(pGate.mX + sideX * gateHalfWidth, postHeight,
                pGate.mY + sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX - sideX * gateHalfWidth, postHeight,
+    GroundVertex(pGate.mX - sideX * gateHalfWidth, postHeight,
                pGate.mY - sideZ * gateHalfWidth);
     glEnd();
     glLineWidth(2.5f);
     glBegin(GL_LINE_LOOP);
-    glVertex3d(pGate.mX - sideX * gateHalfWidth, 0.38, pGate.mY - sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX - sideX * gateHalfWidth, postHeight, pGate.mY - sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + sideX * gateHalfWidth, postHeight, pGate.mY + sideZ * gateHalfWidth);
-    glVertex3d(pGate.mX + sideX * gateHalfWidth, 0.38, pGate.mY + sideZ * gateHalfWidth);
+    GroundVertex(pGate.mX - sideX * gateHalfWidth, 0.38, pGate.mY - sideZ * gateHalfWidth);
+    GroundVertex(pGate.mX - sideX * gateHalfWidth, postHeight, pGate.mY - sideZ * gateHalfWidth);
+    GroundVertex(pGate.mX + sideX * gateHalfWidth, postHeight, pGate.mY + sideZ * gateHalfWidth);
+    GroundVertex(pGate.mX + sideX * gateHalfWidth, 0.38, pGate.mY + sideZ * gateHalfWidth);
     glEnd();
     glLineWidth(1.0f);
 }
@@ -1578,10 +1653,10 @@ void DrawBoostPad(const BoostPad& pPad, const std::vector<RaceGate>& pWaypoints)
     glColor3f(0.02f, 0.18f, 0.28f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
-    glVertex3d(pPad.mX - pPad.mRadius, 0.38, pPad.mY - pPad.mRadius);
-    glVertex3d(pPad.mX + pPad.mRadius, 0.38, pPad.mY - pPad.mRadius);
-    glVertex3d(pPad.mX + pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
-    glVertex3d(pPad.mX - pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
+    GroundVertex(pPad.mX - pPad.mRadius, 0.38, pPad.mY - pPad.mRadius);
+    GroundVertex(pPad.mX + pPad.mRadius, 0.38, pPad.mY - pPad.mRadius);
+    GroundVertex(pPad.mX + pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
+    GroundVertex(pPad.mX - pPad.mRadius, 0.38, pPad.mY + pPad.mRadius);
     glEnd();
     glDisable(GL_LIGHTING);
     glColor3f(0.2f, 0.95f, 1.0f);
@@ -1592,10 +1667,10 @@ void DrawBoostPad(const BoostPad& pPad, const std::vector<RaceGate>& pWaypoints)
         const double tip = center + pPad.mRadius * 0.34;
         const double halfWidth = pPad.mRadius * 0.26;
         glBegin(GL_TRIANGLES);
-        glVertex3d(pPad.mX + forwardX * tip, 0.405, pPad.mY + forwardY * tip);
-        glVertex3d(pPad.mX + forwardX * tail + sideX * halfWidth, 0.405,
+        GroundVertex(pPad.mX + forwardX * tip, 0.405, pPad.mY + forwardY * tip);
+        GroundVertex(pPad.mX + forwardX * tail + sideX * halfWidth, 0.405,
                    pPad.mY + forwardY * tail + sideY * halfWidth);
-        glVertex3d(pPad.mX + forwardX * tail - sideX * halfWidth, 0.405,
+        GroundVertex(pPad.mX + forwardX * tail - sideX * halfWidth, 0.405,
                    pPad.mY + forwardY * tail - sideY * halfWidth);
         glEnd();
     }
@@ -1608,11 +1683,11 @@ void DrawMine(const Mine& pMine)
         return;
     glColor3f(0.1f, 0.08f, 0.06f);
     glBegin(GL_TRIANGLE_FAN);
-    glVertex3d(pMine.mX, 0.62, pMine.mY);
+    GroundVertex(pMine.mX, 0.62, pMine.mY);
     for (int degree = 0; degree <= 360; degree += 30)
     {
         const double angle = degree * kPi / 180.0;
-        glVertex3d(pMine.mX + std::cos(angle) * pMine.mRadius,
+        GroundVertex(pMine.mX + std::cos(angle) * pMine.mRadius,
                    0.45, pMine.mY + std::sin(angle) * pMine.mRadius);
     }
     glEnd();
@@ -1621,10 +1696,10 @@ void DrawMine(const Mine& pMine)
     for (int spike = 0; spike < 8; ++spike)
     {
         const double angle = spike * kPi * 0.25;
-        glVertex3d(pMine.mX, 0.95, pMine.mY);
-        glVertex3d(pMine.mX + std::cos(angle - 0.2) * pMine.mRadius * 1.25,
+        GroundVertex(pMine.mX, 0.95, pMine.mY);
+        GroundVertex(pMine.mX + std::cos(angle - 0.2) * pMine.mRadius * 1.25,
                    0.48, pMine.mY + std::sin(angle - 0.2) * pMine.mRadius * 1.25);
-        glVertex3d(pMine.mX + std::cos(angle + 0.2) * pMine.mRadius * 1.25,
+        GroundVertex(pMine.mX + std::cos(angle + 0.2) * pMine.mRadius * 1.25,
                    0.48, pMine.mY + std::sin(angle + 0.2) * pMine.mRadius * 1.25);
     }
     glEnd();
@@ -1636,23 +1711,23 @@ void DrawHazardZone(const HazardZone& pZone)
     glColor3f(0.03f, 0.22f, 0.34f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
-    glVertex3d(pZone.mX - pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
-    glVertex3d(pZone.mX - pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
+    GroundVertex(pZone.mX - pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
+    GroundVertex(pZone.mX + pZone.mRadius, waterHeight, pZone.mY - pZone.mRadius);
+    GroundVertex(pZone.mX + pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
+    GroundVertex(pZone.mX - pZone.mRadius, waterHeight, pZone.mY + pZone.mRadius);
     glEnd();
     glColor3f(0.12f, 0.7f, 0.82f);
     glBegin(GL_LINE_LOOP);
-    glVertex3d(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
-    glVertex3d(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
-    glVertex3d(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
+    GroundVertex(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
+    GroundVertex(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY - pZone.mRadius);
+    GroundVertex(pZone.mX + pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
+    GroundVertex(pZone.mX - pZone.mRadius, waterHeight + 0.01, pZone.mY + pZone.mRadius);
     glEnd();
     glBegin(GL_LINES);
     for (double offset = -pZone.mRadius + 0.5; offset < pZone.mRadius; offset += 1.0)
     {
-        glVertex3d(pZone.mX + offset - 0.24, waterHeight + 0.012, pZone.mY);
-        glVertex3d(pZone.mX + offset + 0.24, waterHeight + 0.012, pZone.mY);
+        GroundVertex(pZone.mX + offset - 0.24, waterHeight + 0.012, pZone.mY);
+        GroundVertex(pZone.mX + offset + 0.24, waterHeight + 0.012, pZone.mY);
     }
     glEnd();
 }
@@ -1667,34 +1742,34 @@ void DrawRaisedSection(const RaisedSection& pSection)
     glColor3f(0.94f, 0.76f, 0.1f);
     glBegin(GL_QUADS);
     glNormal3d(0.0, 1.0, 0.0);
-    glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
     glColor3f(0.82f, 0.58f, 0.06f);
-    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
     glColor3f(0.72f, 0.48f, 0.04f);
-    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, deckHeight, -pSection.mHalfWidth);
     glColor3f(0.52f, 0.34f, 0.025f);
     glNormal3d(0.0, -1.0, 0.0);
-    glVertex3d(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
-    glVertex3d(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
-    glVertex3d(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, pSection.mHalfWidth);
+    GroundVertex(pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
+    GroundVertex(-pSection.mHalfLength, baseHeight, -pSection.mHalfWidth);
     glEnd();
     glColor3f(0.62f, 0.42f, 0.03f);
     for (int end = -1; end <= 1; end += 2)
@@ -1704,14 +1779,14 @@ void DrawRaisedSection(const RaisedSection& pSection)
             const double x = end * (pSection.mHalfLength - 0.28);
             const double z = side * (pSection.mHalfWidth - 0.28);
             glBegin(GL_QUADS);
-            glVertex3d(x - 0.18, baseHeight, z - 0.18);
-            glVertex3d(x + 0.18, baseHeight, z - 0.18);
-            glVertex3d(x + 0.18, deckHeight, z - 0.18);
-            glVertex3d(x - 0.18, deckHeight, z - 0.18);
-            glVertex3d(x + 0.18, baseHeight, z + 0.18);
-            glVertex3d(x - 0.18, baseHeight, z + 0.18);
-            glVertex3d(x - 0.18, deckHeight, z + 0.18);
-            glVertex3d(x + 0.18, deckHeight, z + 0.18);
+            GroundVertex(x - 0.18, baseHeight, z - 0.18);
+            GroundVertex(x + 0.18, baseHeight, z - 0.18);
+            GroundVertex(x + 0.18, deckHeight, z - 0.18);
+            GroundVertex(x - 0.18, deckHeight, z - 0.18);
+            GroundVertex(x + 0.18, baseHeight, z + 0.18);
+            GroundVertex(x - 0.18, baseHeight, z + 0.18);
+            GroundVertex(x - 0.18, deckHeight, z + 0.18);
+            GroundVertex(x + 0.18, deckHeight, z + 0.18);
             glEnd();
         }
     }
@@ -1719,8 +1794,8 @@ void DrawRaisedSection(const RaisedSection& pSection)
     glBegin(GL_LINES);
     for (double x = -pSection.mHalfLength + 0.35; x < pSection.mHalfLength; x += 0.7)
     {
-        glVertex3d(x, deckHeight + 0.01, -pSection.mHalfWidth);
-        glVertex3d(x, deckHeight + 0.01, pSection.mHalfWidth);
+        GroundVertex(x, deckHeight + 0.01, -pSection.mHalfWidth);
+        GroundVertex(x, deckHeight + 0.01, pSection.mHalfWidth);
     }
     glEnd();
     glPopMatrix();
@@ -1823,7 +1898,8 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
                     int pOnlineColorIndex = -1)
 {
     glShadeModel(GL_SMOOTH);
-    const double hoverOffset = std::fmax(0.0, pState.mHeight - 1.2);
+    const double groundHeight = gDrawGround != nullptr ? gDrawGround->HeightAt(pState.mX, pState.mY) : 0.0;
+    const double hoverOffset = std::fmax(0.0, pState.mHeight - groundHeight - 1.2);
     const double shadowScale = std::fmax(0.42, 1.0 - hoverOffset * 0.5);
     const double craftScale = pRival || pGhost ? 1.0 : 1.12;
     const float shadowAlpha = static_cast<float>(std::fmax(0.1, 0.38 - hoverOffset * 0.14));
@@ -1833,11 +1909,11 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     glDepthMask(GL_FALSE);
     glColor4f(0.01f, 0.02f, 0.025f, shadowAlpha);
     glBegin(GL_TRIANGLE_FAN);
-    glVertex3d(pState.mX, 0.382, pState.mY);
+    glVertex3d(pState.mX, 0.382 + groundHeight, pState.mY);
     for (int degree = 0; degree <= 360; degree += 15)
     {
         const double angle = degree * kPi / 180.0;
-        glVertex3d(pState.mX + std::cos(angle) * 1.75 * craftScale * shadowScale, 0.382,
+        glVertex3d(pState.mX + std::cos(angle) * 1.75 * craftScale * shadowScale, 0.382 + groundHeight,
                    pState.mY + std::sin(angle) * 1.18 * craftScale * shadowScale);
     }
     glEnd();
@@ -2142,107 +2218,6 @@ void DrawHovercraft(const HovercraftState& pState, bool pRival, bool pGhost = fa
     glPopMatrix();
 }
 
-int PixelGlyphIndex(char pCharacter)
-{
-    if (pCharacter >= 'a' && pCharacter <= 'z')
-        return 38 + pCharacter - 'a';
-    if (pCharacter >= 'A' && pCharacter <= 'Z')
-        return pCharacter - 'A';
-    if (pCharacter >= '0' && pCharacter <= '9')
-        return 26 + pCharacter - '0';
-    if (pCharacter == '_')
-        return 36;
-    if (pCharacter == '-')
-        return 37;
-    if (pCharacter == '?')
-        return 64;
-    return -1;
-}
-
-void DrawPixelText(const char* pText, int pLeft, int pTop, int pScale)
-{
-    static const unsigned char kGlyphs[65][7] = {
-        {0x0e,0x11,0x11,0x1f,0x11,0x11,0x11},{0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e},
-        {0x0f,0x10,0x10,0x10,0x10,0x10,0x0f},{0x1e,0x11,0x11,0x11,0x11,0x11,0x1e},
-        {0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f},{0x1f,0x10,0x10,0x1e,0x10,0x10,0x10},
-        {0x0f,0x10,0x10,0x17,0x11,0x11,0x0f},{0x11,0x11,0x11,0x1f,0x11,0x11,0x11},
-        {0x1f,0x04,0x04,0x04,0x04,0x04,0x1f},{0x07,0x02,0x02,0x02,0x02,0x12,0x0c},
-        {0x11,0x12,0x14,0x18,0x14,0x12,0x11},{0x10,0x10,0x10,0x10,0x10,0x10,0x1f},
-        {0x11,0x1b,0x15,0x15,0x11,0x11,0x11},{0x11,0x19,0x15,0x13,0x11,0x11,0x11},
-        {0x0e,0x11,0x11,0x11,0x11,0x11,0x0e},{0x1e,0x11,0x11,0x1e,0x10,0x10,0x10},
-        {0x0e,0x11,0x11,0x11,0x15,0x12,0x0d},{0x1e,0x11,0x11,0x1e,0x14,0x12,0x11},
-        {0x0f,0x10,0x10,0x0e,0x01,0x01,0x1e},{0x1f,0x04,0x04,0x04,0x04,0x04,0x04},
-        {0x11,0x11,0x11,0x11,0x11,0x11,0x0e},{0x11,0x11,0x11,0x11,0x11,0x0a,0x04},
-        {0x11,0x11,0x11,0x15,0x15,0x15,0x0a},{0x11,0x11,0x0a,0x04,0x0a,0x11,0x11},
-        {0x11,0x11,0x0a,0x04,0x04,0x04,0x04},{0x1f,0x01,0x02,0x04,0x08,0x10,0x1f},
-        {0x0e,0x11,0x13,0x15,0x19,0x11,0x0e},{0x04,0x0c,0x04,0x04,0x04,0x04,0x0e},
-        {0x0e,0x11,0x01,0x02,0x04,0x08,0x1f},{0x1e,0x01,0x01,0x0e,0x01,0x01,0x1e},
-        {0x02,0x06,0x0a,0x12,0x1f,0x02,0x02},{0x1f,0x10,0x10,0x1e,0x01,0x01,0x1e},
-        {0x0e,0x10,0x10,0x1e,0x11,0x11,0x0e},{0x1f,0x01,0x02,0x04,0x08,0x08,0x08},
-        {0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e},{0x0e,0x11,0x11,0x0f,0x01,0x01,0x0e},
-        {0x00,0x00,0x00,0x00,0x00,0x00,0x1f},{0x00,0x00,0x00,0x1f,0x00,0x00,0x00},
-        {0x00,0x00,0x0e,0x01,0x0f,0x11,0x0f},{0x10,0x10,0x1e,0x11,0x11,0x11,0x1e},
-        {0x00,0x00,0x0e,0x10,0x10,0x10,0x0e},{0x01,0x01,0x0f,0x11,0x11,0x11,0x0f},
-        {0x00,0x00,0x0e,0x11,0x1f,0x10,0x0e},{0x06,0x09,0x08,0x1c,0x08,0x08,0x08},
-        {0x00,0x00,0x0f,0x11,0x0f,0x01,0x0e},{0x10,0x10,0x1e,0x11,0x11,0x11,0x11},
-        {0x04,0x00,0x0c,0x04,0x04,0x04,0x0e},{0x02,0x00,0x06,0x02,0x02,0x12,0x0c},
-        {0x10,0x10,0x12,0x14,0x18,0x14,0x12},{0x0c,0x04,0x04,0x04,0x04,0x04,0x0e},
-        {0x00,0x00,0x1a,0x15,0x15,0x11,0x11},{0x00,0x00,0x1e,0x11,0x11,0x11,0x11},
-        {0x00,0x00,0x0e,0x11,0x11,0x11,0x0e},{0x00,0x00,0x1e,0x11,0x1e,0x10,0x10},
-        {0x00,0x00,0x0f,0x11,0x0f,0x01,0x01},{0x00,0x00,0x1d,0x12,0x10,0x10,0x10},
-        {0x00,0x00,0x0f,0x10,0x0e,0x01,0x1e},{0x08,0x08,0x1c,0x08,0x08,0x09,0x06},
-        {0x00,0x00,0x11,0x11,0x11,0x13,0x0d},{0x00,0x00,0x11,0x11,0x11,0x0a,0x04},
-        {0x00,0x00,0x11,0x11,0x15,0x15,0x0a},{0x00,0x00,0x11,0x0a,0x04,0x0a,0x11},
-        {0x00,0x00,0x11,0x11,0x0f,0x01,0x0e},{0x00,0x00,0x1f,0x02,0x04,0x08,0x1f},
-        {0x0e,0x11,0x01,0x02,0x04,0x00,0x04}
-    };
-    const auto drawGlyphs = [&](int pOffsetX, int pOffsetY)
-    {
-        int cursorX = pLeft + pOffsetX;
-        glBegin(GL_QUADS);
-        for (const char* character = pText; *character != '\0'; ++character)
-        {
-            const int glyphIndex = PixelGlyphIndex(*character);
-            if (glyphIndex < 0)
-            {
-                cursorX += pScale * 4;
-                continue;
-            }
-            for (int row = 0; row < 7; ++row)
-            {
-                for (int column = 0; column < 5; ++column)
-                {
-                    if ((kGlyphs[glyphIndex][row] & (1 << (4 - column))) == 0)
-                        continue;
-                    const int left = cursorX + column * pScale;
-                    const int top = pTop + pOffsetY + row * pScale;
-                    glVertex2i(left, top);
-                    glVertex2i(left + pScale, top);
-                    glVertex2i(left + pScale, top + pScale);
-                    glVertex2i(left, top + pScale);
-                }
-            }
-            cursorX += pScale * 6;
-        }
-        glEnd();
-    };
-    // A dark drop shadow keeps text legible over bright road, sky, and walls, whatever its colour.
-    GLfloat textColour[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    glGetFloatv(GL_CURRENT_COLOR, textColour);
-    const int shadowOffset = pScale >= 3 ? pScale / 2 : 1;
-    glColor3f(0.0f, 0.02f, 0.04f);
-    drawGlyphs(shadowOffset, shadowOffset);
-    glColor4fv(textColour);
-    drawGlyphs(0, 0);
-}
-
-int PixelTextWidth(const std::string& pText, int pScale)
-{
-    int width = 0;
-    for (char character : pText)
-        width += PixelGlyphIndex(character) < 0 ? pScale * 4 : pScale * 6;
-    return width;
-}
 
 void DrawSetupOverlay(int pWidth, int pHeight)
 {
@@ -4085,6 +4060,25 @@ void DrawHud(const RaceProgress& pPlayerProgress, int pTargetLaps,
         DrawPixelText("WRONG WAY", pointerX - 72, pointerY - 50, 2);
     }
 
+    if (pPlayerState.mInPit && pPlayerState.mSpeed < 6.0 && !pWrongWay)
+    {
+        // Stopped by a step the craft had not jumped: nothing puts it back by itself.
+        std::string recoverKey = SDL_GetScancodeName(static_cast<SDL_Scancode>(gKeyBindings.Key(BindAction::Recover)));
+        for (char& c : recoverKey)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const std::string hint = "STUCK  PRESS " + recoverKey + " TO GO BACK";
+        const int hintWidth = PixelTextWidth(hint.c_str(), 2) + 28;
+        glColor3f(0.72f, 0.06f, 0.08f);
+        glBegin(GL_QUADS);
+        glVertex2i(pointerX - hintWidth / 2, pointerY - 54);
+        glVertex2i(pointerX + hintWidth / 2, pointerY - 54);
+        glVertex2i(pointerX + hintWidth / 2, pointerY - 32);
+        glVertex2i(pointerX - hintWidth / 2, pointerY - 32);
+        glEnd();
+        glColor3f(1.0f, 0.82f, 0.2f);
+        DrawPixelText(hint.c_str(), pointerX - hintWidth / 2 + 14, pointerY - 50, 2);
+    }
+
     if (pPlayerState.mSpinOutSeconds > 0.0)
     {
         const int alertWidth = 320;
@@ -4727,6 +4721,8 @@ int main(int pArgumentCount, char* pArguments[])
     std::vector<HazardZone> hazardZones = selectedTrack.mHazardZones;
     std::vector<Mine> mines = selectedTrack.mMines;
     std::vector<RaisedSection> raisedSections = selectedTrack.mRaisedSections;
+    GroundProfile ground = selectedTrack.Ground();
+    gDrawGround = &ground;
     RaceMode raceMode = RaceMode::SingleRace;
     RivalDifficulty rivalDifficulty = RivalDifficulty::Standard;
     int rivalCount = kRivalCount;
@@ -4927,6 +4923,7 @@ int main(int pArgumentCount, char* pArguments[])
         hazardZones = selectedTrack.mHazardZones;
         mines = selectedTrack.mMines;
         raisedSections = selectedTrack.mRaisedSections;
+        ground = selectedTrack.Ground();
         race = Race(checkpoints, finish, targetLaps);
         rivalRaces.assign(kRivalCount, Race(checkpoints, finish, targetLaps));
         rivalRoute = courseWaypoints;
@@ -6931,7 +6928,7 @@ int main(int pArgumentCount, char* pArguments[])
                     < static_cast<int>(checkpoints.size())
                     ? checkpoints[race.Progress().mNextCheckpoint] : finish;
                 HovercraftState recoveryState = hovercraft.State();
-                if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate))
+                if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate, false, &ground))
                 {
                     hovercraft.Reset(recoveryState);
                     recoveredThisRun = true;
@@ -6947,7 +6944,7 @@ int main(int pArgumentCount, char* pArguments[])
                     < static_cast<int>(checkpoints.size())
                     ? checkpoints[race.Progress().mNextCheckpoint] : finish;
                 HovercraftState recoveryState = hovercraft.State();
-                if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate))
+                if (RecoverHovercraftToRoute(recoveryState, course, recoveryGate, false, &ground))
                 {
                     hovercraft.Reset(recoveryState);
                     recoveredThisRun = true;
@@ -7018,6 +7015,18 @@ int main(int pArgumentCount, char* pArguments[])
         {
             const double seconds = simulationClock.StepSeconds();
             impactSoundCooldown = std::fmax(0.0, impactSoundCooldown - seconds);
+            if (!raceStart.Started())
+            {
+                // On the grid before the start: sit on the ground at the grid, however high it is.
+                const auto settle = [&ground](Hovercraft& pCraft)
+                {
+                    pCraft.ApplyGround(ground);
+                };
+                settle(hovercraft);
+                settle(replayGhost);
+                for (Hovercraft& rival : rivals)
+                    settle(rival);
+            }
             raceStart.Update(seconds);
             if (raceStart.Started() && (winner == 0 || continueDriving))
             {
@@ -7048,7 +7057,7 @@ int main(int pArgumentCount, char* pArguments[])
                         replayGhost.Step(ghostInput, seconds);
                         BounceOffCourseWall(replayGhost, course);
                         ApplyBoostPads(replayGhost, boostPads);
-                        ApplyRaisedSections(replayGhost, raisedSections);
+                        ApplyRaisedSections(replayGhost, raisedSections, ground);
                         ApplyMines(replayGhost, mines);
                         ++ghostFrame;
                     }
@@ -7070,7 +7079,8 @@ int main(int pArgumentCount, char* pArguments[])
                         HovercraftInput rivalInput = rivalControllers[rivalIndex].InputFor(
                             rivals[rivalIndex].State(), others);
                         rivalInput.mJump = ShouldJumpRaisedSection(rivals[rivalIndex].State(),
-                                                                   raisedSections);
+                                                                   raisedSections)
+                            || ShouldJumpGroundStep(rivals[rivalIndex].State(), ground);
                         rivals[rivalIndex].Step(rivalInput, seconds);
                         if (weaponsAllowed && rivalInput.mFire)
                             rivalMissiles[rivalIndex].Fire(rivals[rivalIndex].State());
@@ -7084,7 +7094,7 @@ int main(int pArgumentCount, char* pArguments[])
                         if (stuckInPlace || goingNowhere)
                         {
                             HovercraftState recovered = rivals[rivalIndex].State();
-                            if (RecoverHovercraftToRoute(recovered, course, finish, true))
+                            if (RecoverHovercraftToRoute(recovered, course, finish, true, &ground))
                             {
                                 rivals[rivalIndex].Reset(recovered);
                                 rivalControllers[rivalIndex].Retarget(recovered);
@@ -7119,7 +7129,7 @@ int main(int pArgumentCount, char* pArguments[])
                         Hovercraft& rival = rivals[rivalIndex];
                         BounceOffCourseWall(rival, course);
                         ApplyBoostPads(rival, boostPads);
-                        ApplyRaisedSections(rival, raisedSections);
+                        ApplyRaisedSections(rival, raisedSections, ground);
                         ApplyMines(rival, mines);
                         ApplyHazardZones(rival, hazardZones, seconds);
                     }
@@ -7178,7 +7188,7 @@ int main(int pArgumentCount, char* pArguments[])
                     if (raceMode == RaceMode::Practice)
                         practiceGuide.ObserveBoost();
                 }
-                ApplyRaisedSections(hovercraft, raisedSections);
+                ApplyRaisedSections(hovercraft, raisedSections, ground);
                 if (ApplyMines(hovercraft, mines) && impactSoundCooldown <= 0.0)
                 {
                     audioFeedback.PlayImpact();
@@ -7454,6 +7464,7 @@ int main(int pArgumentCount, char* pArguments[])
                     break;
                 }
             }
+            cameraState.mGroundHeight = ground.HeightAt(cameraState.mX, cameraState.mY);
             const GLfloat atmosphere[] = {selectedTrack.mAtmosphereRed, selectedTrack.mAtmosphereGreen,
                               selectedTrack.mAtmosphereBlue, 1.0f};
             glFogfv(GL_FOG_COLOR, atmosphere);
@@ -7467,9 +7478,11 @@ int main(int pArgumentCount, char* pArguments[])
             glMatrixMode(GL_MODELVIEW);
             glLoadIdentity();
             const double cameraDistances[] = {4.6, 5.8, 7.4};
+            const double cameraGround = gCameraRig.UpdateGround(cameraState.mGroundHeight, frameSeconds, gCameraMotion);
             SetChaseCamera(cameraState, cameraDistances[cameraDistanceSetting],
                            gCameraRig.Update(cameraState.mHeading, frameSeconds, gCameraMotion),
-                           gCameraRig.UpdateRise(std::fmax(0.0, cameraState.mHeight - 1.2), frameSeconds, gCameraMotion));
+                           gCameraRig.UpdateRise(std::fmax(0.0, cameraState.mHeight - cameraGround - 1.2), frameSeconds, gCameraMotion),
+                           cameraGround);
             const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
             glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
             DrawCourseGrid(cameraState);
@@ -7547,9 +7560,11 @@ int main(int pArgumentCount, char* pArguments[])
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         const double cameraDistances[] = {4.6, 5.8, 7.4};
+        const double cameraGround = gCameraRig.UpdateGround(state.mGroundHeight, frameSeconds, gCameraMotion);
         SetChaseCamera(state, cameraDistances[cameraDistanceSetting],
                        gCameraRig.Update(state.mHeading, frameSeconds, gCameraMotion),
-                           gCameraRig.UpdateRise(std::fmax(0.0, state.mHeight - 1.2), frameSeconds, gCameraMotion));
+                           gCameraRig.UpdateRise(std::fmax(0.0, state.mHeight - cameraGround - 1.2), frameSeconds, gCameraMotion),
+                           cameraGround);
         const GLfloat sunDirection[] = {-0.35f, 0.82f, 0.45f, 0.0f};
         glLightfv(GL_LIGHT0, GL_POSITION, sunDirection);
         DrawCourseGrid(state);

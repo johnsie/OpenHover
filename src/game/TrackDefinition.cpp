@@ -160,6 +160,11 @@ std::string TrackDefinition::Validate() const
             return "raised section dimensions and clearance must be positive";
         }
     }
+    {
+        const std::string groundProblem = GroundProfileProblem(mWaypoints, mGroundHeights);
+        if (!groundProblem.empty())
+            return groundProblem;
+    }
 
     for (std::size_t index = 0; index < mWaypoints.size(); ++index)
     {

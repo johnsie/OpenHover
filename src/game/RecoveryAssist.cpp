@@ -4,9 +4,10 @@
 #include <cmath>
 
 bool RecoverHovercraftToRoute(HovercraftState& pState, const Course& pCourse,
-                              const RaceGate& pTarget, bool pForce)
+                              const RaceGate& pTarget, bool pForce, const GroundProfile* pGround)
 {
-    if (!pForce && pCourse.IsOnRoad(pState.mX, pState.mY))
+    const bool trapped = pState.mInPit && pGround != nullptr;
+    if (!pForce && !trapped && pCourse.IsOnRoad(pState.mX, pState.mY))
         return false;
 
     double routeX = pState.mX;
@@ -24,5 +25,30 @@ bool RecoverHovercraftToRoute(HovercraftState& pState, const Course& pCourse,
     else if (pTarget.mX != routeX || pTarget.mY != routeY)
         pState.mHeading = std::atan2(pTarget.mY - routeY, pTarget.mX - routeX);
     pState.mTravelHeading = pState.mHeading;
+    if (trapped)
+    {
+        // Back along the road to the higher ground the craft fell from, and a good run-up beyond.
+        const double backX = -std::cos(pState.mHeading);
+        const double backY = -std::sin(pState.mHeading);
+        for (double distance = 2.0; distance <= 120.0; distance += 2.0)
+        {
+            if (pGround->HeightAt(routeX + backX * distance, routeY + backY * distance) > pState.mGroundHeight + 0.5)
+            {
+                double x = routeX + backX * (distance + 40.0);
+                double y = routeY + backY * (distance + 40.0);
+                double roadX = x;
+                double roadY = y;
+                pCourse.ProjectToRoad(x, y, roadX, roadY);
+                pState.mX = roadX;
+                pState.mY = roadY;
+                pState.mHeading = pCourse.RouteHeadingNear(roadX, roadY);
+                pState.mTravelHeading = pState.mHeading;
+                break;
+            }
+        }
+        pState.mGroundHeight = pGround->HeightAt(pState.mX, pState.mY);
+        pState.mHeight = pState.mGroundHeight + HovercraftTuning().mHoverHeight;
+        pState.mInPit = false;
+    }
     return true;
 }

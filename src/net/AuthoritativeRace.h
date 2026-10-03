@@ -126,6 +126,7 @@ private:
     std::vector<HazardZone> mHazardZones;
     std::vector<Mine> mMines;
     std::vector<RaisedSection> mRaisedSections;
+    GroundProfile mGround;
     std::vector<Racer> mRacers;
 };
 

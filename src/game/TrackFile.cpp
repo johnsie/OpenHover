@@ -95,6 +95,8 @@ std::string SerializeTrack(const TrackDefinition& pTrack)
             << Number(section.mHalfLength) << ' ' << Number(section.mHalfWidth) << ' '
             << Number(section.mHeading) << ' ' << Number(section.mClearHeight) << ' '
             << (section.mDriveable ? 1 : 0) << '\n';
+    for (const double height : pTrack.mGroundHeights)
+        out << "ground-height " << Number(height) << '\n';
     return out.str();
 }
 
@@ -228,6 +230,16 @@ std::string ParseTrack(const std::string& pText, TrackDefinition& pOut)
                 mine.mY = values[1];
                 mine.mRadius = values[2];
                 track.mMines.push_back(mine);
+            }
+        }
+        else if (keyword == "ground-height")
+        {
+            problem = expectCount(1);
+            if (problem.empty())
+            {
+                if (track.mGroundHeights.size() >= kMaximumItems)
+                    return Error(lineNumber, "too many ground-height lines");
+                track.mGroundHeights.push_back(values[0]);
             }
         }
         else if (keyword == "raised")

@@ -31,7 +31,16 @@ struct HovercraftState
     bool mBoosting = false;
     bool mHasPreviousPosition = false;
     bool mReverseFacing = false;
-    double mSurfaceHeight = 0.0;
+    double mSurfaceHeight = 0.0; // top of the raised section under the craft; at ground level when none
+    // The height of the ground under the craft (zero on a flat track); a raised section or a
+    // hazard measures the craft's height above this.
+    double mGroundHeight = 0.0;
+    // Stopped by a step up it had not jumped (the wall of a pit, say): recovery takes it back to the
+    // higher ground for another run at it.
+    bool mInPit = false;
+    // In the air: after a jump, or over a drop in the ground, the craft moves under gravity until it
+    // reaches the floor, so a jump at the edge of a pit carries it across the gap.
+    bool mFalling = false;
 };
 
 void ApplySpinOut(HovercraftState& pState, double pSeconds = 1.25);
@@ -53,12 +62,15 @@ struct HovercraftTuning
     double mBoostRechargePerSecond = 0.16;
     double mFuelBurnPerSecond = 0.006;
     double mFuelRecoveryPerSecond = 0.012;
-    double mJumpImpulse = 7.4;
+    double mJumpImpulse = 8.3; // upward speed of a jump; with the fall gravity below, about 2 m high and 0.95 s in the air
     double mJumpHoverSpring = 26.0;
     double mJumpHoverDamping = 7.0;
     double mJumpHeightThreshold = 0.12;
     double mLandingRestitution = 0.08;
+    double mFallGravity = 17.4; // metres per second squared, while in the air after a jump or over a drop
 };
+
+class GroundProfile;
 
 class Hovercraft
 {
@@ -66,6 +78,10 @@ public:
     explicit Hovercraft(const HovercraftTuning& pTuning = HovercraftTuning());
 
     void Reset(const HovercraftState& pState = HovercraftState());
+    // Checks the ground under the craft after it moved (see ResolveGroundStep). Unlike Reset this
+    // keeps the jump state, and marks the craft as over no raised section until one is applied again.
+    // Returns true if a step up in the ground stopped the craft (it had not jumped).
+    bool ApplyGround(const GroundProfile& pGround);
     void SetTuning(const HovercraftTuning& pTuning);
     void Step(const HovercraftInput& pInput, double pSeconds);
 

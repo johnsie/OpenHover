@@ -7,7 +7,7 @@ namespace
 {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kSmoothRate = 7.0;
-constexpr double kRiseFraction = 0.7;
+constexpr double kRiseFraction = 0.85;
 
 double WrapAngle(double pAngle)
 {
@@ -42,6 +42,7 @@ void CameraRig::Reset(double pHeading)
 {
     mHeading = pHeading;
     mHeight = 0.0;
+    mGroundReady = false;
 }
 
 double CameraRig::Update(double pCraftHeading, double pFrameSeconds, CameraMotion pMotion)
@@ -58,10 +59,24 @@ double CameraRig::Update(double pCraftHeading, double pFrameSeconds, CameraMotio
 
 double CameraRig::UpdateRise(double pCraftHeight, double pFrameSeconds, CameraMotion pMotion)
 {
-    const double rate = pMotion == CameraMotion::Reduced ? 2.5 : 5.0;
+    const double rate = pMotion == CameraMotion::Reduced ? 2.5 : 9.0;
     const double blend = 1.0 - std::exp(-rate * (pFrameSeconds > 0.1 ? 0.1 : pFrameSeconds));
     mHeight += (pCraftHeight - mHeight) * blend;
     return mHeight * kRiseFraction;
+}
+
+double CameraRig::UpdateGround(double pGroundHeight, double pFrameSeconds, CameraMotion pMotion)
+{
+    if (!mGroundReady)
+    {
+        mGround = pGroundHeight;
+        mGroundReady = true;
+        return mGround;
+    }
+    const double rate = pMotion == CameraMotion::Reduced ? 3.0 : 6.0;
+    const double blend = 1.0 - std::exp(-rate * (pFrameSeconds > 0.1 ? 0.1 : pFrameSeconds));
+    mGround += (pGroundHeight - mGround) * blend;
+    return mGround;
 }
 
 double CameraRig::SpeedZoomScale(CameraMotion pMotion)

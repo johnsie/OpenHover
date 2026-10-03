@@ -3,6 +3,30 @@
 Player-facing changes and known limitations. Each release names what changed for players, not
 internal refactors. See the [roadmap](roadmap.md) for what is planned next.
 
+## 0.1.21
+
+- New **ground height** for tracks. A track can give a height for each stretch of route; the floor is
+  level along it and steps where one stretch meets the next, so a track can have drops, pits and
+  steps up. A step down is a drop the craft falls off. A step up has to be jumped: the craft never
+  rises by itself. A craft stopped by a step shows a "stuck" hint with the recovery key and goes back
+  to the higher ground for another run; nothing puts the player back automatically. Rivals jump steps
+  and pits. It is drawn, simulated and validated the same way online and offline. Flat tracks are
+  unchanged; older games refuse a track that uses it. See `docs/track-format.md`.
+- The jump is higher and longer: about 2 metres up and nearly a second in the air. How far it
+  carries depends on speed (about 34 metres at full speed, 22 at two thirds), so wide pits need a
+  run-up. The chase camera now rises with the craft on a jump. Saved ghosts from earlier versions
+  are retired because the physics changed.
+- New **OpenHoverTrkConvert** application: converts a room-based `.trk` track from another hover
+  racing game into an `.ohtrack`, for tracks you have the rights to. It shows the rooms it read, the
+  loop it chose, the road width, the start, gates and bridges, and the ground heights of the track it
+  will write. Click a room to switch it off; buttons (or `S`, `F`, `R`, `N`) save into the game's
+  tracks folder, flip the direction, switch all rooms back on and rename; further switches choose
+  ground heights, boost pads, mines and hazard zones. It can also run without a window with `--out`.
+  Floor heights become ground height at their real size. Ceilings, stacked rooms and side lanes are
+  not converted.
+- The track editor's minimum start straight is now 20 metres, down from 60, so tracks made of many
+  short legs can have a start.
+
 ## 0.1.20
 
 - The track editor can now add **mines** and **hazard zones**. Two toggle buttons, Mines and

@@ -10,7 +10,7 @@
 // Increment when hovercraft handling, collision, or other physics changes enough that an old
 // recording would no longer replay to the same line. Combined with the built-in content version
 // to form the tag that saved ghosts must match.
-constexpr int kGhostPhysicsVersion = 2;
+constexpr int kGhostPhysicsVersion = 3;
 
 // The fastest completed run for each track and craft class, kept as the inputs that replay it.
 class GhostLibrary

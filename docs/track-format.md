@@ -39,8 +39,26 @@ with `#` are ignored.
 | `waypoint`, `checkpoint`, `boost-pad`, `mine` | x y radius |
 | `hazard` | x y radius speed-loss-per-second |
 | `raised` | x y half-length half-width heading clear-height driveable (0 or 1) |
+| `ground-height` | metres; one line per waypoint, in waypoint order (leave all out for a flat track) |
 
-Waypoints and checkpoints are listed in driving order, starting with the finish. A file that
+Waypoints and checkpoints are listed in driving order, starting with the finish.
+
+Ground height: with `ground-height` lines the floor changes level in steps, never slopes. Each line
+gives the height of the stretch of route from that waypoint to the next; the ground is level along it
+and steps at the waypoint, across the road. The craft hovers 1.2 above the ground under it (bridges
+and hazards measure from the ground too). A step down is a drop: the craft leaves the ground and falls
+under gravity to the lower floor. A step up has to be jumped: the craft never rises by itself, so a
+step of more than a quarter metre stops a craft that is not high enough above it (it bounces back). A
+jump rises about 2 metres and stays up for just under a second, so how far it carries depends on
+speed: about 34 metres at full speed, 22 metres at two thirds. Pits and gaps are only cleared with a
+run-up, and a step up of more than about 2.1 metres cannot be jumped at all: that is a trap. A craft stopped by a step can use recovery, which puts it back on the
+road at the higher ground for another run. Rivals jump steps and pits on their own; the player's
+craft only jumps when the player presses jump.
+Rules: one height per waypoint, heights within 60 metres of zero, no step within reach of the
+starting grid, and where the route crosses itself both roads must be at the same height (the bridge
+carries one over the other). Steps and drops can be any size. Tracks with no `ground-height` lines
+are flat, as before; an older game that does not know the line refuses the track instead of racing it
+flat. A file that
 parses can still fail validation; the checker runs both, so every rule above applies.
 
 ## Playing a custom track
@@ -81,3 +99,43 @@ list immediately. The id comes from the name, and a name that is already used by
 refused. **Save and Drive** does the same and then starts a local race on the track so you can try
 it; pause and choose Main Menu to return, and the editor keeps your points. Saving again after
 more edits replaces the track you saved before.
+
+## Converting room-based tracks
+
+`OpenHoverTrkConvert` is a separate application that converts a track from another hover racing
+game (a room-based `.trk` file) into an `.ohtrack`, and shows what it will write. **Only convert
+tracks you have the rights to**: this repository's clean-room policy does not allow importing
+anyone else's track data.
+
+Start it with a file (`OpenHoverTrkConvert file.trk`) or drop a file onto its window. The window
+shows every room it read, coloured by floor height, with the original starting positions as green
+dots. A light-blue loop is the route it chose, a translucent band shows the real road width, and the
+usual markers show the start, gates, bridges and pads of the track that will be written, with an
+arrow for the direction of travel. The panel on the right lists what could not be carried over.
+
+- Click a room to switch it off or on (for example a side lane the route should avoid); the loop is
+  recalculated at once. `F` drives the loop the other way round, `R` switches every room back on,
+  `N` renames the track, and `S` saves it into the game's own `tracks` folder. Every action also
+  has a button at the bottom of the panel.
+- The **boost pads**, **mines** and **hazard zones** buttons (`P`, `M`, `H`) choose which of those the
+  builder adds to long straights, as in the track editor. Pads are on by default, mines and hazard
+  zones off. Red squares are mines and purple squares are hazard zones.
+- With `--out file.ohtrack` it runs without a window: `OpenHoverTrkConvert file.trk --out out.ohtrack
+  [--name NAME] [--exclude ROOM]... [--reverse]`. Mines and hazards are only available in the window.
+
+How it works: rooms that share part of an edge are linked; a loop through the start room is found
+(never doubling straight back on itself); the loop's room centres and doorways become the route;
+the road width follows the narrowest quarter of the doorways; and the track is finished by the same
+builder as the track editor (start straight, four gates, bridges, pads) and then validated. Each room's floor height becomes the ground height of the route stretches through it (measured
+from the start room, in steps of a quarter metre), and the ground steps at each doorway where the floor
+does, at its real size. A room whose floor is lower than the road either side of it becomes a pit; if
+its far wall is too high to climb out of, the converter warns that it is a trap. If the heights do not
+fit the route (for example two crossing roads at different levels) the track is made flat with a
+warning. The **ground
+heights** button (`G`) switches this off.
+
+Limits: it understands only the one layout it was written from and refuses anything else with a
+reason. Ceilings and stacked rooms are not converted, side lanes and branches off the loop are left out,
+and where the original road is wider than one lane the result may need a lane switched off or some
+editing afterwards. The converted track starts on a long straight near the original start, which
+can be a little way from it.

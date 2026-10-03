@@ -3,6 +3,7 @@
 #define OPENHOVER_TRACK_DEFINITION_H
 
 #include "BoostPad.h"
+#include "Ground.h"
 #include "HazardZone.h"
 #include "Mine.h"
 #include "RaisedSection.h"
@@ -30,6 +31,8 @@ struct TrackDefinition
     std::vector<HazardZone> mHazardZones;
     std::vector<Mine> mMines;
     std::vector<RaisedSection> mRaisedSections;
+    // Ground height at each waypoint, in metres; empty for a flat track.
+    std::vector<double> mGroundHeights;
     double mRoadHalfWidth = 5.0;
     float mAtmosphereRed = 0.14f;
     float mAtmosphereGreen = 0.28f;
@@ -42,6 +45,7 @@ struct TrackDefinition
     float mWallBlue = 0.91f;
 
     std::string Validate() const;
+    GroundProfile Ground() const { return GroundProfile(mWaypoints, mGroundHeights); }
     RaceGate Finish() const;
     std::vector<RaceGate> Checkpoints() const;
 };

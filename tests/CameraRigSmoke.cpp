@@ -34,11 +34,11 @@ int main()
     ok = Expect(wrapped > 3.0 || wrapped < -3.0, "smooth turns the short way across pi") && ok;
     rig.Reset(0.0);
     const double rise = rig.UpdateRise(4.0, 0.016, CameraMotion::Standard);
-    ok = Expect(rise > 0.0 && rise < 4.0 * 0.7, "rise eases toward craft height") && ok;
+    ok = Expect(rise > 0.0 && rise < 4.0 * 0.85, "rise eases toward craft height") && ok;
     double settled = rise;
     for (int i = 0; i < 600; ++i)
         settled = rig.UpdateRise(4.0, 0.016, CameraMotion::Standard);
-    ok = Expect(std::fabs(settled - 2.8) < 0.01, "rise settles at 70 percent of height") && ok;
+    ok = Expect(std::fabs(settled - 3.4) < 0.01, "rise settles at 85 percent of height") && ok;
     rig.Reset(0.0);
     ok = Expect(rig.UpdateRise(4.0, 0.016, CameraMotion::Reduced) < rise, "reduced rises slower") && ok;
     ok = Expect(NextCameraMotion(CameraMotion::Standard, -1) == CameraMotion::Reduced, "cycle back wraps")

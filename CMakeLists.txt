@@ -32,7 +32,7 @@ add_library(openhover_content STATIC src/content/TrackCatalog.cpp src/content/Tr
 target_include_directories(openhover_content PUBLIC src/content)
 target_link_libraries(openhover_content PUBLIC openhover_util Threads::Threads)
 
-add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/RouteTracker.cpp src/game/SteeringAssist.cpp src/game/StallDetector.cpp src/game/TrackBuilder.cpp src/game/TrackDefinition.cpp src/game/TrackFile.cpp src/game/TrackHash.cpp src/game/TrackLoader.cpp src/game/WallCollision.cpp)
+add_library(openhover_game STATIC src/game/BoostPad.cpp src/game/CameraRig.cpp src/game/Championship.cpp src/game/Course.cpp src/game/CraftClass.cpp src/game/FixedStepClock.cpp src/game/GhostLibrary.cpp src/game/Ground.cpp src/game/HazardZone.cpp src/game/Hovercraft.cpp src/game/InputRecording.cpp src/game/LapTiming.cpp src/game/Mine.cpp src/game/Missile.cpp src/game/PracticeGuide.cpp src/game/Race.cpp src/game/RaceMode.cpp src/game/RacePosition.cpp src/game/RaceStart.cpp src/game/RacerCollision.cpp src/game/RaisedSection.cpp src/game/RecoveryAssist.cpp src/game/RivalController.cpp src/game/RivalNames.cpp src/game/RouteGuidance.cpp src/game/RouteTracker.cpp src/game/SteeringAssist.cpp src/game/StallDetector.cpp src/game/TrackBuilder.cpp src/game/TrackDefinition.cpp src/game/TrackFile.cpp src/game/TrackHash.cpp src/game/TrackLoader.cpp src/game/WallCollision.cpp)
 target_include_directories(openhover_game PUBLIC src/game)
 target_link_libraries(openhover_game PUBLIC openhover_util)
 
@@ -56,8 +56,23 @@ endif()
 add_executable(OpenHoverTrackCheck src/tools/TrackCheck.cpp)
 target_link_libraries(OpenHoverTrackCheck PRIVATE openhover_game)
 
+# Reading and converting room-based track files from another game (for tracks whose author has the
+# rights to them); no SDL or OpenGL here, so it is easy to test.
+add_library(openhover_convert STATIC src/convert/TrkReader.cpp src/convert/TrkConverter.cpp)
+target_include_directories(openhover_convert PUBLIC src/convert)
+target_link_libraries(openhover_convert PUBLIC openhover_game)
+
+# The built-in pixel font, shared by the game and the tools that draw their own screens.
+add_library(openhover_ui STATIC src/ui/PixelFont.cpp)
+target_include_directories(openhover_ui PUBLIC src/ui)
+target_link_libraries(openhover_ui PUBLIC SDL2::SDL2 OpenGL::GL)
+
+# A separate application that converts room-based tracks and shows the layout it will write.
+add_executable(OpenHoverTrkConvert src/convert/TrkConvertApp.cpp)
+target_link_libraries(OpenHoverTrkConvert PRIVATE openhover_convert openhover_ui SDL2::SDL2 OpenGL::GL)
+
 add_executable(OpenHover src/main.cpp src/AudioFeedback.cpp)
-target_link_libraries(OpenHover PRIVATE openhover_game openhover_input openhover_lobby SDL2::SDL2 OpenGL::GL)
+target_link_libraries(OpenHover PRIVATE openhover_game openhover_input openhover_lobby openhover_ui SDL2::SDL2 OpenGL::GL)
 target_compile_definitions(OpenHover PRIVATE OPENHOVER_VERSION="${OPENHOVER_PACKAGE_VERSION}")
 
 if(WIN32)
@@ -86,7 +101,7 @@ if(UNIX)
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
     set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages")
     if(OPENHOVER_DESKTOP_PACKAGE)
-        install(TARGETS OpenHover OpenHoverTrackCheck RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(TARGETS OpenHover OpenHoverTrackCheck OpenHoverTrkConvert RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
         set(CPACK_PACKAGE_NAME openhover)
     else()
         install(TARGETS OpenHoverServer OpenHoverTrackCheck RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -127,6 +142,10 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(SteeringAssistSmoke tests/SteeringAssistSmoke.cpp)
     target_link_libraries(SteeringAssistSmoke PRIVATE openhover_game)
     add_test(NAME SteeringAssistSmoke COMMAND SteeringAssistSmoke)
+
+    add_executable(TrkConvertSmoke tests/TrkConvertSmoke.cpp)
+    target_link_libraries(TrkConvertSmoke PRIVATE openhover_convert openhover_lobby)
+    add_test(NAME TrkConvertSmoke COMMAND TrkConvertSmoke)
 
     add_executable(CrashReportSmoke tests/CrashReportSmoke.cpp)
     target_link_libraries(CrashReportSmoke PRIVATE openhover_util)
@@ -259,6 +278,10 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(LapTimingSmoke tests/LapTimingSmoke.cpp)
     target_link_libraries(LapTimingSmoke PRIVATE openhover_game)
     add_test(NAME LapTimingSmoke COMMAND LapTimingSmoke)
+
+    add_executable(GroundSmoke tests/GroundSmoke.cpp)
+    target_link_libraries(GroundSmoke PRIVATE openhover_game)
+    add_test(NAME GroundSmoke COMMAND GroundSmoke)
 
     add_executable(RaisedSectionSmoke tests/RaisedSectionSmoke.cpp)
     target_link_libraries(RaisedSectionSmoke PRIVATE openhover_game)

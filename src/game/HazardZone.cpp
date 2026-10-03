@@ -14,7 +14,7 @@ bool ApplyHazardZone(HovercraftState& pState, const HazardZone& pZone, double pS
         return false;
     const double deltaX = pState.mX - pZone.mX;
     const double deltaY = pState.mY - pZone.mY;
-    if (pState.mHeight >= kHazardClearHeight
+    if (pState.mHeight - pState.mGroundHeight >= kHazardClearHeight
         || deltaX * deltaX + deltaY * deltaY > pZone.mRadius * pZone.mRadius)
         return false;
     pState.mSpeed *= std::exp(-pZone.mSpeedLossPerSecond * pSeconds);

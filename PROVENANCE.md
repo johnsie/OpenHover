@@ -57,6 +57,8 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/Hovercraft.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | hovercraft simulation API |
 | `src/game/Hovercraft.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic 2D hovercraft simulation |
 | `src/main.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | SDL2/OpenGL 3D test arena |
+| `src/ui/PixelFont.h` | Original | Maintainer, with AI assistance (GitHub Copilot, Claude) | MIT OR Apache-2.0 | pixel font API, moved out of main.cpp so tools can share it |
+| `src/ui/PixelFont.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot, Claude) | MIT OR Apache-2.0 | 5x7 pixel font glyphs and drawing, moved unchanged out of main.cpp |
 | `tests/HovercraftSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | hovercraft simulation test |
 | `src/game/Championship.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | championship event progression API |
 | `src/game/Championship.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic championship scoring and progression |
@@ -74,6 +76,9 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/game/InputRecording.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | deterministic input recording |
 | `tests/InputRecordingSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | input recording test |
 | `src/game/HazardZone.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | hazard zone API |
+| `src/game/Ground.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ground height profile along a track route |
+| `src/game/Ground.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ground height lookup and slope/crossing validation |
+| `tests/GroundSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ground height, hover, hazard and file tests |
 | `src/game/HazardZone.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | time-scaled hazard slow zones |
 | `tests/HazardZoneSmoke.cpp` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | hazard zone test |
 | `src/game/CraftClass.h` | Original | Maintainer, with AI assistance (GitHub Copilot) | MIT OR Apache-2.0 | original hovercraft class API |
@@ -165,6 +170,12 @@ complete until its files are recorded (see `docs/clean-room-policy.md`);
 | `src/util/CrashReport.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash report API |
 | `src/util/CrashReport.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash signal and terminate handlers writing a plain-text report |
 | `tests/CrashReportSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | crash report contents test |
+| `src/convert/TrkReader.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | reader for room-based track files: API |
+| `src/convert/TrkReader.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | reader for the one room-based layout observed; checks every room against itself |
+| `src/convert/TrkConverter.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | room-track to OpenHover track conversion API |
+| `src/convert/TrkConverter.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | finds touching rooms, a loop through the start room, and builds the track |
+| `src/convert/TrkConvertApp.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | OpenHoverTrkConvert GUI and command-line converter |
+| `tests/TrkConvertSmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | reader and converter test on a synthetic generated file |
 | `src/game/GhostLibrary.h` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best-run ghost store API |
 | `src/game/GhostLibrary.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | best ghost selection and versioned persistence |
 | `tests/GhostLibrarySmoke.cpp` | Original | Maintainer, with AI assistance (Claude) | MIT OR Apache-2.0 | ghost selection and persistence test |

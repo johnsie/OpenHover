@@ -21,11 +21,16 @@ public:
     // Smoothed height the camera should rise by so the craft stays framed during jumps and
     // over raised sections.
     double UpdateRise(double pCraftHeight, double pFrameSeconds, CameraMotion pMotion);
+    // Smoothed ground height under the craft, so a step in the ground eases the view instead of
+    // snapping it.
+    double UpdateGround(double pGroundHeight, double pFrameSeconds, CameraMotion pMotion);
     static double SpeedZoomScale(CameraMotion pMotion);
 
 private:
     double mHeading = 0.0;
     double mHeight = 0.0;
+    double mGround = 0.0;
+    bool mGroundReady = false;
 };
 
 #endif
